@@ -1823,9 +1823,9 @@ It should help answer:
 
 ``` text
 STAGE 1 — Dataset Preparation & Ground Truth      COMPLETE
-STAGE 2 — Canonical Internal Data Model           NEXT
-STAGE 3 — Entity Resolution                       PENDING
-STAGE 4 — Correlation Engine                      PENDING
+STAGE 2 — Canonical Internal Data Model           COMPLETE
+STAGE 3 — Entity Resolution                       COMPLETE
+STAGE 4 — Correlation Engine                      NEXT
 STAGE 5 — Unified Timeline / Fusion               PENDING
 STAGE 6 — Feature Engineering                     PENDING
 STAGE 7 — Rules + ML                              PENDING
@@ -1840,3 +1840,23 @@ STAGE 14 — Production Hardening                   FUTURE
 
 **Current milestone:** Stage 1 is complete and frozen. Development
 proceeds next with Stage 2.
+
+
+## 9. Stage 3 — Entity Resolution (COMPLETE & FROZEN)
+**Purpose**: Provides deterministic, typed identity resolution across Bank, CDR, and IPDR data to answer "Where does the same identity occur?" without creating false correlation assumptions.
+
+**Input Contract**: Operates strictly on Stage 2 canonical objects (`BankTransaction`, `CDREvent`, `IPDRSession`).
+
+**Identity Types**: Supports strict, closed-set mapping using `PHONE`, `CUSTOMER_ID`, `BANK_ACCOUNT`, `IMSI` (mobile subscriber/subscription identity), `IMEI` (mobile equipment/device identity), `CELL_ID`, and `IP_ADDRESS`.
+
+**Identity Observations**: Preserves 1-to-many context mapping using lightweight `IdentityObservation` objects identifying source type, record ID, role, and timestamp.
+
+**Registry Behavior**: `O(1)` memory-safe lookup mappings by combining identity type and normalized value. Prevents exact duplicate entries but maintains all distinct observations.
+
+**Missing/Null**: Safely skips missing optional values, avoiding injection of dummy objects like `None` or `NaN` into the graph.
+
+**Cross-Source Bridges**: Bank Phone ↔ CDR Phone (100% overlap match), CDR Phone ↔ IPDR MSISDN, CDR IMSI ↔ IPDR IMSI (56% overlap), CDR IMEI ↔ IPDR IMEI, CDR Cell ↔ IPDR Cell.
+
+**Limitations**: Strict determinism. Semantic event correlation mapping belongs strictly to Stage 4. Behavior patterns are out of scope.
+
+**Stage 4 Handoff**: Stage 4 can now query the `IdentityRegistry` for specific identities and retrieve their relevant temporal footprints without triggering full dataset scans.
