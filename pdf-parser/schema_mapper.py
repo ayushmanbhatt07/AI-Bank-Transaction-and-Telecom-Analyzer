@@ -1,242 +1,273 @@
 """
-pdf_parser.py
+schema_mapper.py
 
-Handles PDF ingestion, robust multi-page header detection, data normalization (including dates 
-and numbers), Debit/Credit merging, and acts as the entry point while securely preserving identifiers.
+Handles canonical schema definitions, refined alias dictionaries, 
+weighted dataset detection utilizing fuzzy scoring, and a highly optimized 
+4-tier semantic mapping system with cached embeddings and static data.
 """
 
-import pdfplumber
 import pandas as pd
-import unicodedata
-import os
-import re
-import numpy as np
-from typing import List, Optional
+import logging
+from typing import Dict, List, Optional, Set, Tuple
 from rapidfuzz import process, fuzz
+from sentence_transformers import SentenceTransformer, util
 
-from schema_mapper import (
-    detect_dataset_type, 
-    map_columns, 
-    ensure_schema, 
-    save_csv,
-    SCHEMAS,
-    ALIASES
-)
+logger = logging.getLogger(__name__)
 
-def _normalize_text(text: str) -> str:
-    """Removes strange unicode characters, newlines, tabs, and trims whitespace."""
-    if pd.isna(text):
-        return text
-    text = str(text)
-    text = unicodedata.normalize("NFKD", text)
-    # Strip tabs, newlines, multiple spaces
-    text = re.sub(r'\s+', ' ', text)
-    return text.strip()
+class UnknownDatasetError(Exception):
+    pass
 
-def _detect_provider_metadata(df: pd.DataFrame):
-    """Internal debugging mechanism to log potential data providers, zero impact on schema."""
-    providers = ["SBI", "HDFC", "ICICI", "Axis", "PNB", "BOB", "Airtel", "Jio", "Vi", "BSNL"]
-    text_dump = " ".join(df.head(20).fillna("").astype(str).values.flatten()).upper()
-    found = [p for p in providers if p.upper() in text_dump]
-    if found:
-        print(f"[METADATA] Detected Provider Context: {', '.join(set(found))}")
+class AmbiguousDatasetError(Exception):
+    pass
 
-def extract_tables_from_pdf(pdf_path: str) -> pd.DataFrame:
-    """Extracts tables across all pages using pdfplumber."""
-    all_rows = []
-    
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            tables = page.extract_tables()
-            if not tables:
-                table = page.extract_table()
-                if table:
-                    tables = [table]
-                    
-            for table in tables:
-                for row in table:
-                    all_rows.append(row)
-                    
-    if not all_rows:
-        raise ValueError("No tabular data found in the provided PDF.")
+# ==========================================
+# CANONICAL SCHEMAS
+# ==========================================
 
-    return pd.DataFrame(all_rows)
+BANK_SCHEMA = [
+    "Transaction_ID", "Date", "Timestamp", "Txn_Ref_Number", "Transaction_Mode", 
+    "Currency", "Transaction_Amount", "Sender_Customer_ID", "Sender_Customer_Name", 
+    "Sender_Bank_Name", "Sender_Account_Number", "Sender_Account_Type", "Sender_IFSC", 
+    "Sender_Phone_Number", "Receiver_Customer_ID", "Receiver_Customer_Name", 
+    "Receiver_Bank_Name", "Receiver_Account_Number", "Receiver_Account_Type", 
+    "Receiver_IFSC", "Receiver_Phone_Number"
+]
 
-def _detect_and_apply_header(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Scans candidate rows using fuzzy similarity against all known schema concepts.
-    Provides robust detection for complex strings like 'Transaction Date (DD/MM/YYYY)'.
-    """
-    all_valid_terms = set()
+CDR_SCHEMA = [
+    "CDR_ID", "Call_Date", "Call_Start_Time", "A_Party_Number", "B_Party_Number", 
+    "Call_Type", "Call_Duration_Seconds", "IMSI", "IMEI", "First_BTS_Location", 
+    "First_Cell_Global_ID", "Roaming_Network_Circle"
+]
+
+IPDR_SCHEMA = [
+    "IPDR_ID", "Session_Date", "Session_Start_Time", "Subscriber_IMSI", "Subscriber_MSISDN", 
+    "Device_IMEI", "Source_IP_Address", "Destination_IP_Address", "Destination_Port", 
+    "Cell_Global_ID", "Session_Duration_Seconds"
+]
+
+SCHEMAS = {
+    "bank": BANK_SCHEMA,
+    "cdr": CDR_SCHEMA,
+    "ipdr": IPDR_SCHEMA
+}
+
+# ==========================================
+# EXPANDED AND REFINED ALIAS DICTIONARIES
+# ==========================================
+
+BANK_ALIASES = {
+    "Date": ["Txn Date", "Transaction Date", "Posting Date", "Value Date", "Date", "Booking Date", "Tran Date"],
+    "Txn_Ref_Number": ["UTR Number", "Reference", "Ref No", "Reference Number", "Reference No.", "Cheque/Ref No.", "Transaction ID", "Transaction Reference", "UTR", "Cheque Number", "Chq No"],
+    "Transaction_Amount": ["Amount", "Txn Amount", "Transaction Amount", "Transfer Amount", "Transaction_Amount_Merged"], 
+    "Sender_Account_Number": ["Account No", "A/C No", "Sender A/C", "Account Number", "Account", "Debit Account", "Source Account"],
+    "Receiver_Account_Number": ["Beneficiary Account", "Receiver Account", "Destination Account", "Credit Account"],
+    "Transaction_Mode": ["Mode", "Type", "Particulars", "Description", "Remarks", "Narration", "Transaction Details", "Details"],
+    "Sender_Phone_Number": ["Mobile", "Phone", "Contact", "Phone Number", "Mobile No"],
+    "Sender_IFSC": ["IFSC", "IFSC Code", "Sender IFSC"],
+}
+
+CDR_ALIASES = {
+    "Call_Date": ["Date", "Call Date", "Start Date"],
+    "Call_Start_Time": ["Time", "Start Time", "Call Time"],
+    "A_Party_Number": ["Calling Number", "Originating Number", "Caller", "A Party", "Calling No", "A Number"],
+    "B_Party_Number": ["Called Number", "Destination Number", "Receiver", "B Party", "Called No", "B Number"],
+    "Call_Duration_Seconds": ["Duration", "Call Duration", "Time (sec)", "Duration (s)", "Secs", "Total Duration"],
+    "First_BTS_Location": ["Location", "Tower Location", "BTS", "Site ID", "Cell Site", "Address"],
+    "Call_Type": ["Type", "Call Type", "Voice/SMS", "Service Type"],
+    "IMSI": ["IMSI Number", "Subscriber IMSI"],
+    "IMEI": ["IMEI Number", "Handset IMEI", "Device IMEI"],
+}
+
+IPDR_ALIASES = {
+    "Session_Date": ["Date", "Session Date", "Start Date"],
+    "Session_Start_Time": ["Time", "Start Time", "Session Time"],
+    "Source_IP_Address": ["Src IP", "Source IP", "Origin IP", "Private IP", "Framed IP"],
+    "Destination_IP_Address": ["Dest IP", "Destination IP", "Target IP", "Server IP"],
+    "Destination_Port": ["Dest Port", "Target Port", "Port", "Server Port"],
+    "Session_Duration_Seconds": ["Duration", "Time (sec)", "Uptime", "Session Duration"],
+    "Subscriber_MSISDN": ["MSISDN", "Mobile Number", "Phone Number"],
+}
+
+ALIASES = {
+    "bank": BANK_ALIASES,
+    "cdr": CDR_ALIASES,
+    "ipdr": IPDR_ALIASES
+}
+
+# ==========================================
+# STATIC CACHE & WEIGHTS
+# ==========================================
+
+HIGH_WEIGHT_TERMS = {
+    "txn_ref_number", "transaction_id", "sender_account_number", "sender_ifsc", "receiver_account_number",
+    "utr number", "reference", "utr", "ifsc code",
+    "a_party_number", "b_party_number", "imsi", "imei", "first_cell_global_id",
+    "source_ip_address", "destination_ip_address", "destination_port", "subscriber_msisdn"
+}
+
+_dataset_terms_cache = {}
+_all_valid_terms = set()
+_semantic_model = None
+_schema_embeddings_cache = {}
+
+def _build_caches():
+    """Builds static lookup dictionaries exactly once."""
+    if _dataset_terms_cache:
+        return
+        
     for d_type, schema in SCHEMAS.items():
-        all_valid_terms.update(col.lower() for col in schema)
-        for alias_list in ALIASES[d_type].values():
-            all_valid_terms.update(alias.lower() for alias in alias_list)
+        terms_map = {}
+        for col in schema:
+            terms_map[col.lower()] = 3.0 if col.lower() in HIGH_WEIGHT_TERMS else 1.0
+            _all_valid_terms.add(col.lower())
+            
+        for canonical, alias_list in ALIASES[d_type].items():
+            weight = 3.0 if canonical.lower() in HIGH_WEIGHT_TERMS else 1.0
+            for alias in alias_list:
+                terms_map[alias.lower()] = weight
+                _all_valid_terms.add(alias.lower())
+                
+        _dataset_terms_cache[d_type] = terms_map
 
-    best_idx = 0
-    max_score = 0
-    limit = min(20, len(df))
+_build_caches()
 
-    for i in range(limit):
-        row = df.iloc[i].dropna().astype(str).str.lower().str.strip()
-        score = 0
-        for cell in row:
-            if not cell:
-                continue
-            # Score each cell with RapidFuzz
-            match = process.extractOne(cell, all_valid_terms, scorer=fuzz.WRatio)
+def _get_semantic_model() -> SentenceTransformer:
+    global _semantic_model
+    if _semantic_model is None:
+        logger.info("Loading SentenceTransformer model for semantic matching...")
+        _semantic_model = SentenceTransformer('all-MiniLM-L6-v2')
+    return _semantic_model
+
+def get_all_valid_terms() -> Set[str]:
+    """Returns the globally cached set of valid canonical and alias terms."""
+    return _all_valid_terms
+
+def get_dataset_terms(dataset_type: str) -> Dict[str, float]:
+    """Returns the cached mapping of terms to weights for a given dataset type."""
+    return _dataset_terms_cache.get(dataset_type, {})
+
+def detect_dataset_type(headers: List[str]) -> str:
+    """
+    Scores datasets using a combination of exact and fuzzy matching, applying 
+    multipliers for highly unique identifying fields to prevent misclassification.
+    """
+    scores = {"bank": 0.0, "cdr": 0.0, "ipdr": 0.0}
+    clean_headers = [str(h).lower().strip() for h in headers if pd.notna(h) and str(h).strip()]
+    
+    for dataset in SCHEMAS.keys():
+        terms_dict = _dataset_terms_cache[dataset]
+        valid_terms = list(terms_dict.keys())
+        
+        for header in clean_headers:
+            match = process.extractOne(header, valid_terms, scorer=fuzz.WRatio)
             if match and match[1] >= 80:
-                score += match[1]
-                
-        if score > max_score:
-            max_score = score
-            best_idx = i
+                matched_term = match[0]
+                confidence_score = match[1]
+                weight = terms_dict[matched_term]
+                scores[dataset] += (confidence_score * weight)
 
-    if max_score < 160: # Requires roughly two decent valid matches
-        raise ValueError("Failed to detect a valid table header row in the document.")
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    best_dataset, best_score = sorted_scores[0]
+    runner_up_dataset, runner_up_score = sorted_scores[1]
 
-    df.columns = df.iloc[best_idx].astype(str).apply(_normalize_text)
-    df = df.iloc[best_idx+1:].reset_index(drop=True)
-    return df
+    if best_score < 160:
+        raise UnknownDatasetError(f"Cannot identify dataset. Confidence too low. Scores: {scores}")
+        
+    if runner_up_score > 0 and (best_score - runner_up_score) <= 80:
+        raise AmbiguousDatasetError(
+            f"Dataset type ambiguous. Closely matched {best_dataset} ({best_score:.1f}) "
+            f"and {runner_up_dataset} ({runner_up_score:.1f})."
+        )
 
-def _remove_repeated_headers(df: pd.DataFrame) -> pd.DataFrame:
-    """Fuzzy removes header rows that repeat on subsequent pages. Ignores formatting differences."""
-    # Strip everything except alphanumeric characters for strict structure comparison
-    header_str = re.sub(r'\W+', '', "".join([str(c) for c in df.columns]).lower())
+    logger.info(f"Detected dataset type '{best_dataset.upper()}' with score {best_score:.1f}")
+    return best_dataset
+
+def semantic_match(header: str, candidates: List[str], threshold: float = 0.55) -> Optional[str]:
+    """Uses cached Sentence-Transformers embeddings to find the most semantically similar field."""
+    if not candidates:
+        return None
+        
+    model = _get_semantic_model()
+    cache_key = tuple(candidates)
     
-    def is_repeated_header(row):
-        row_str = re.sub(r'\W+', '', "".join(row.dropna().astype(str)).lower())
-        if not row_str:
-            return False
-        return fuzz.WRatio(header_str, row_str) > 90
-
-    mask = df.apply(is_repeated_header, axis=1)
-    return df[~mask].reset_index(drop=True)
-
-def _merge_debit_credit(df: pd.DataFrame) -> pd.DataFrame:
-    """Merges isolated Debit and Credit columns into a unified Transaction Amount column."""
-    cols = [str(c).lower().strip() for c in df.columns]
+    if cache_key not in _schema_embeddings_cache:
+        _schema_embeddings_cache[cache_key] = model.encode(candidates, convert_to_tensor=True)
+        
+    candidate_embs = _schema_embeddings_cache[cache_key]
+    header_emb = model.encode(header, convert_to_tensor=True)
     
-    debit_col, credit_col = None, None
-    debit_aliases = ['debit', 'withdrawal', 'dr']
-    credit_aliases = ['credit', 'deposit', 'cr']
-
-    for original_col, lower_col in zip(df.columns, cols):
-        if lower_col in debit_aliases or any(fuzz.WRatio(a, lower_col) > 90 for a in debit_aliases):
-            debit_col = original_col
-        elif lower_col in credit_aliases or any(fuzz.WRatio(a, lower_col) > 90 for a in credit_aliases):
-            credit_col = original_col
-
-    if debit_col and credit_col:
-        s_debit = df[debit_col].replace(r'^\s*$', pd.NA, regex=True)
-        s_credit = df[credit_col].replace(r'^\s*$', pd.NA, regex=True)
-        df['Transaction_Amount_Merged'] = s_credit.combine_first(s_debit)
-
-    return df
-
-def _clean_raw_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """Applies robust, pre-mapping structural normalizations safely."""
-    _detect_provider_metadata(df)
-    df = _detect_and_apply_header(df)
-    df = _remove_repeated_headers(df)
+    cos_scores = util.cos_sim(header_emb, candidate_embs)[0]
+    best_idx = int(pd.Series(cos_scores.cpu().numpy()).idxmax())
+    best_score = cos_scores[best_idx].item()
     
-    # Normalize strings (handling pandas map function deprecation gracefully)
-    df = df.applymap(lambda x: _normalize_text(x) if isinstance(x, str) else x)
+    if best_score >= threshold:
+        return candidates[best_idx]
+    return None
+
+def find_best_match(header: str, dataset_type: str, used_canonical: Set[str]) -> Optional[str]:
+    """Executes the optimized 4-tier matching pipeline for a single header."""
+    header_clean = str(header).strip().lower()
+    schema = SCHEMAS[dataset_type]
+    aliases = ALIASES.get(dataset_type, {})
     
-    df = df.replace(r'^\s*$', pd.NA, regex=True)
-    df = df.dropna(how='all')
-    df = df.drop_duplicates()
-    df = _merge_debit_credit(df)
-    return df.reset_index(drop=True)
+    available_schema = [c for c in schema if c not in used_canonical]
+    if not available_schema:
+        return None
 
-def _clean_mapped_dataframe(df: pd.DataFrame, dataset_type: str) -> pd.DataFrame:
-    """
-    Cleans mapped numeric and date values.
-    STRICTLY avoids modifying Identifiers (Account, IMEI, Phone, Ports, IPs).
-    """
-    numeric_columns = {
-        "bank": ["Transaction_Amount"],
-        "cdr": ["Call_Duration_Seconds"],
-        "ipdr": ["Session_Duration_Seconds"]
-    }
-    date_columns = {
-        "bank": ["Date"],
-        "cdr": ["Call_Date"],
-        "ipdr": ["Session_Date"]
-    }
+    # Tier 1: Exact Match
+    for canonical in available_schema:
+        if canonical.lower() == header_clean:
+            return canonical
+
+    # Tier 2: Alias Match
+    for canonical, alias_list in aliases.items():
+        if canonical in available_schema:
+            for alias in alias_list:
+                if alias.lower() == header_clean:
+                    return canonical
+
+    # Tier 3: RapidFuzz Match (Syntactic Similarity)
+    match_result = process.extractOne(header_clean, available_schema, scorer=fuzz.WRatio)
+    if match_result:
+        matched_str, score, _ = match_result
+        if score >= 80.0:
+            return matched_str
+
+    # Tier 4: Semantic Match (Contextual Similarity)
+    semantic_result = semantic_match(header_clean, available_schema, threshold=0.55)
+    if semantic_result:
+        return semantic_result
+
+    return None
+
+def map_columns(df: pd.DataFrame, dataset_type: str) -> pd.DataFrame:
+    """Maps the extracted DataFrame columns to the canonical schema."""
+    mapping = {}
+    used_canonical = set()
     
-    # 1. Clean monetary/duration fields robustly (Fix Regex bug)
-    for col in numeric_columns.get(dataset_type, []):
-        if col in df.columns:
-            def _clean_num(val):
-                if pd.isna(val): return val
-                s = str(val).replace(',', '').replace('₹', '').replace('$', '').replace('Rs.', '').replace('Rs', '')
-                s = re.sub(r'(?i)\bcr\b|\bdr\b', '', s).strip()
-                return s if s else pd.NA
-                
-            df[col] = df[col].apply(_clean_num)
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+    for col in df.columns:
+        if pd.isna(col) or 'unnamed' in str(col).lower():
+            continue
+            
+        best_match = find_best_match(col, dataset_type, used_canonical)
+        if best_match:
+            mapping[col] = best_match
+            used_canonical.add(best_match)
+            
+    df_mapped = df.rename(columns=mapping)
+    columns_to_keep = [col for col in df_mapped.columns if col in SCHEMAS[dataset_type]]
+    return df_mapped[columns_to_keep]
 
-    # 2. Normalize canonical date formats consistently
-    for col in date_columns.get(dataset_type, []):
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True).dt.strftime('%Y-%m-%d')
-            # Retain NA structure instead of string 'NaT'
-            df[col] = df[col].replace({np.nan: pd.NA, 'NaT': pd.NA})
+def ensure_schema(df: pd.DataFrame, dataset_type: str) -> pd.DataFrame:
+    """Ensures exact canonical schema layout. Fills missing with pd.NA."""
+    canonical_schema = SCHEMAS[dataset_type]
+    return df.reindex(columns=canonical_schema, fill_value=pd.NA)
 
-    return df
-
-def _validate_schema(df: pd.DataFrame, dataset_type: str):
-    """Raises robust validation errors ensuring output structural integrity."""
-    critical_fields = {
-        "bank": ["Date", "Transaction_Amount"],
-        "cdr": ["Call_Date", "A_Party_Number"],
-        "ipdr": ["Session_Date", "Source_IP_Address"]
-    }
-    
-    if df.empty or df.isna().all(axis=None):
-        raise ValueError("Schema validation failed: Extracted DataFrame is entirely empty/null.")
-
-    for col in critical_fields.get(dataset_type, []):
-        if col not in df.columns:
-            raise ValueError(f"Schema validation failed: Critical column '{col}' is missing.")
-        if df[col].isna().all():
-            raise ValueError(f"Schema validation failed: Critical column '{col}' is completely empty.")
-
-def parse_pdf(pdf_path: str, output_dir: str = ".") -> pd.DataFrame:
-    """
-    Main PDF Parsing Pipeline. Converts unstructured PDFs directly 
-    into rigorously validated canonical CSVs.
-    """
-    if not os.path.exists(pdf_path):
-        raise FileNotFoundError(f"The PDF file at '{pdf_path}' was not found.")
-        
-    try:
-        # 1. Block Extraction
-        raw_df = extract_tables_from_pdf(pdf_path)
-        
-        # 2. Structural & Header Normalization
-        cleaned_df = _clean_raw_dataframe(raw_df)
-        
-        # 3. Intelligent Classification
-        dataset_type = detect_dataset_type(list(cleaned_df.columns))
-        
-        # 4. Canonical Projection (4-Tier mapping)
-        mapped_df = map_columns(cleaned_df, dataset_type)
-        
-        # 5. Semantic Value Normalization (e.g. Dates, Floats)
-        clean_mapped_df = _clean_mapped_dataframe(mapped_df, dataset_type)
-        
-        # 6. Strict Schema Enforcement
-        final_df = ensure_schema(clean_mapped_df, dataset_type)
-        
-        # 7. Quality Sanity Validation
-        _validate_schema(final_df, dataset_type)
-        
-        # 8. Dispatch to Disk
-        save_csv(final_df, dataset_type, output_dir)
-        
-        return final_df
-
-    except Exception as e:
-        raise RuntimeError(f"Failed to parse PDF '{pdf_path}': {str(e)}") from e
+def save_csv(df: pd.DataFrame, dataset_type: str, output_dir: str = ".") -> str:
+    """Saves DataFrame complying with the strict CSV contract (UTF-8, No Index)."""
+    import os
+    filename = f"{dataset_type}_parsed.csv"
+    output_path = os.path.join(output_dir, filename)
+    df.to_csv(output_path, index=False, encoding="utf-8")
+    logger.info(f"Successfully saved structured CSV to: {output_path}")
+    return output_path

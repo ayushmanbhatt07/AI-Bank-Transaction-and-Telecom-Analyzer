@@ -1,8 +1,8 @@
 """
 pdf_parser.py
 
-Handles PDF ingestion, advanced table extraction, robust multi-page header detection, 
-data normalization, Debit/Credit merging, and acts as the entry point.
+Handles PDF ingestion, advanced table & text extraction fallback, robust multi-page 
+header detection, and data normalization, acting as the primary entry point.
 """
 
 import pdfplumber
@@ -10,7 +10,9 @@ import pandas as pd
 import unicodedata
 import os
 import re
-from typing import List
+import numpy as np
+import logging
+from typing import List, Optional, Tuple
 from rapidfuzz import fuzz
 
 from schema_mapper import (
@@ -18,90 +20,182 @@ from schema_mapper import (
     map_columns, 
     ensure_schema, 
     save_csv,
-    SCHEMAS,
-    ALIASES
+    get_all_valid_terms,
+    get_dataset_terms,
+    semantic_match,
+    SCHEMAS
 )
 
+logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+class ScannedPDFError(Exception):
+    pass
+
+class PDFExtractionError(Exception):
+    pass
+
 def _normalize_text(text: str) -> str:
-    """Removes strange unicode characters, newlines, and trims whitespace."""
+    """Removes strange unicode characters, newlines, tabs, and trims whitespace."""
     if pd.isna(text):
         return text
     text = str(text)
     text = unicodedata.normalize("NFKD", text)
-    text = " ".join(text.replace("\n", " ").split())
+    text = re.sub(r'\s+', ' ', text)
     return text.strip()
+
+def _detect_provider_metadata(df: pd.DataFrame) -> Optional[str]:
+    """Internal mechanism to log potential data providers, zero impact on schema."""
+    providers = ["SBI", "HDFC", "ICICI", "Axis", "PNB", "BOB", "Airtel", "Jio", "Vi", "BSNL"]
+    text_dump = " ".join(df.head(20).fillna("").astype(str).values.flatten()).upper()
+    found = [p for p in providers if p.upper() in text_dump]
+    if found:
+        provider_str = ', '.join(set(found))
+        logger.info(f"Detected Provider Context: {provider_str}")
+        return provider_str
+    return None
+
+def _extract_via_text_fallback(pdf) -> pd.DataFrame:
+    """Fallback mechanism: extracts text, splits by lines, then by multiple spaces."""
+    all_rows = []
+    for page in pdf.pages:
+        text = page.extract_text()
+        if not text:
+            continue
+        for line in text.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            # Split by 2 or more spaces
+            row = re.split(r'\s{2,}', line)
+            if len(row) > 1:
+                all_rows.append(row)
+                
+    if not all_rows:
+        return pd.DataFrame()
+        
+    # Pad rows to consistent length
+    max_cols = max(len(r) for r in all_rows)
+    padded = [r + [pd.NA] * (max_cols - len(r)) for r in all_rows]
+    return pd.DataFrame(padded)
 
 def extract_tables_from_pdf(pdf_path: str) -> pd.DataFrame:
     """
-    Extracts tables across all pages using pdfplumber.
-    Falls back to single extract_table if extract_tables fails.
+    Extracts tables across all pages using pdfplumber strategies.
+    Falls back to regex-based text extraction if tabular bounds fail.
+    Raises ScannedPDFError if the PDF appears to lack textual content.
     """
     all_rows = []
+    total_chars = 0
     
     with pdfplumber.open(pdf_path) as pdf:
+        # Pre-check for scanned PDFs
+        for page in pdf.pages:
+            t = page.extract_text()
+            if t: total_chars += len(t)
+        
+        if total_chars < 50:
+            raise ScannedPDFError("PDF contains almost no text. It is likely a scanned image requiring OCR.")
+            
+        # Strategy 1: Default tables
         for page in pdf.pages:
             tables = page.extract_tables()
-            if not tables:
-                table = page.extract_table()
-                if table:
-                    tables = [table]
-                    
-            for table in tables:
-                for row in table:
-                    cleaned_row = [_normalize_text(cell) for cell in row]
-                    all_rows.append(cleaned_row)
-                    
+            if tables:
+                for table in tables:
+                    for row in table:
+                        all_rows.append(row)
+        
+        # Strategy 2: Explicit Text strategy
+        if not all_rows:
+            logger.info("Default table extraction failed. Attempting alternative text-based tabular strategy...")
+            table_settings = {"vertical_strategy": "text", "horizontal_strategy": "text"}
+            for page in pdf.pages:
+                tables = page.extract_tables(table_settings)
+                if tables:
+                    for table in tables:
+                        for row in table:
+                            all_rows.append(row)
+
+        # Strategy 3: Pure text extraction splitting
+        if not all_rows:
+            logger.info("Structured table parsing failed. Attempting spatial text extraction fallback...")
+            df = _extract_via_text_fallback(pdf)
+            if not df.empty:
+                return df
+                
     if not all_rows:
-        raise ValueError("No tabular data found in the provided PDF.")
+        raise PDFExtractionError("No tabular data could be extracted from the provided PDF.")
 
     return pd.DataFrame(all_rows)
 
 def _detect_and_apply_header(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Scans the first 20 rows. Scores each based on canonical schemas and aliases.
-    The highest-scoring row becomes the header, and rows above it are dropped.
+    Scans candidate rows using fuzzy similarity against all known schema concepts.
+    Cleans bracketed text and uses semantic matching as a final fallback.
     """
-    valid_terms = set()
-    for d_type, schema in SCHEMAS.items():
-        valid_terms.update(col.lower() for col in schema)
-        for alias_list in ALIASES[d_type].values():
-            valid_terms.update(alias.lower() for alias in alias_list)
-
-    best_idx = 0
-    max_score = -1
-    limit = min(20, len(df))
+    all_valid_terms = get_all_valid_terms()
+    best_idx = -1
+    max_score = 0
+    limit = min(25, len(df))
 
     for i in range(limit):
         row = df.iloc[i].dropna().astype(str).str.lower().str.strip()
-        score = sum(1 for cell in row if cell in valid_terms)
-        
+        score = 0
+        for cell in row:
+            if not cell:
+                continue
+            # Remove brackets and colon punctuation for cleaner matching
+            clean_cell = re.sub(r'[\[\]\(\)\{\}\:\;]', '', cell).strip()
+            
+            match = process.extractOne(clean_cell, all_valid_terms, scorer=fuzz.WRatio)
+            if match and match[1] >= 80:
+                score += match[1]
+            elif len(clean_cell) > 3:
+                # Semantic fallback for the cell
+                sem_match = semantic_match(clean_cell, list(all_valid_terms), threshold=0.65)
+                if sem_match:
+                    score += 65
+
         if score > max_score:
             max_score = score
             best_idx = i
 
-    if max_score < 2:
-        raise ValueError("Failed to detect a valid table header row in the document.")
+    if max_score < 160: 
+        raise ValueError(f"Failed to detect a valid table header row. Max score achieved: {max_score}")
 
-    df.columns = df.iloc[best_idx].astype(str).str.strip()
-    df = df.iloc[best_idx+1:].reset_index(drop=True)
-    return df
+    logger.info(f"Header row detected at index {best_idx} (Score: {max_score:.1f})")
+    df.columns = df.iloc[best_idx].astype(str).apply(_normalize_text)
+    return df.iloc[best_idx+1:].reset_index(drop=True)
 
 def _remove_repeated_headers(df: pd.DataFrame) -> pd.DataFrame:
-    """Fuzzy removes header rows that repeat on subsequent pages."""
-    header_str = " ".join([str(c) for c in df.columns]).lower()
+    """
+    Removes header rows that repeat on subsequent pages by comparing individual cells 
+    against the detected header to avoid monolithic string concatenation flaws.
+    """
+    header_cells = [str(c).strip().lower() for c in df.columns]
     
     def is_repeated_header(row):
-        row_str = " ".join(row.dropna().astype(str)).lower()
-        return fuzz.WRatio(header_str, row_str) > 90
+        matches = 0
+        valid_cells = 0
+        for h_str, r_cell in zip(header_cells, row):
+            r_str = str(r_cell).strip().lower()
+            if h_str and h_str != 'nan':
+                valid_cells += 1
+                # Ignore minor punctuation/spacing
+                h_clean = re.sub(r'\W+', '', h_str)
+                r_clean = re.sub(r'\W+', '', r_str)
+                if r_clean and fuzz.WRatio(h_clean, r_clean) > 85:
+                    matches += 1
+                    
+        if valid_cells == 0:
+            return False
+        return (matches / valid_cells) >= 0.7 
 
     mask = df.apply(is_repeated_header, axis=1)
     return df[~mask].reset_index(drop=True)
 
 def _merge_debit_credit(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    If a Bank statement contains separate Debit and Credit columns instead of an Amount,
-    this merges them into a single column so the schema mapper doesn't drop values.
-    """
+    """Merges isolated Debit and Credit columns into a unified Transaction Amount column."""
     cols = [str(c).lower().strip() for c in df.columns]
     
     debit_col, credit_col = None, None
@@ -117,25 +211,34 @@ def _merge_debit_credit(df: pd.DataFrame) -> pd.DataFrame:
     if debit_col and credit_col:
         s_debit = df[debit_col].replace(r'^\s*$', pd.NA, regex=True)
         s_credit = df[credit_col].replace(r'^\s*$', pd.NA, regex=True)
-        # Prioritize Credit, fallback to Debit
         df['Transaction_Amount_Merged'] = s_credit.combine_first(s_debit)
+        logger.info("Merged isolated Debit and Credit columns into single amount column.")
 
     return df
 
-def _clean_raw_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """Applies pre-mapping structure normalizations."""
+def _clean_raw_dataframe(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[str]]:
+    """Applies robust, pre-mapping structural normalizations safely."""
+    provider = _detect_provider_metadata(df)
     df = _detect_and_apply_header(df)
     df = _remove_repeated_headers(df)
+    
+    # Normalize string format correctly depending on pandas version
+    try:
+        df = df.map(lambda x: _normalize_text(x) if isinstance(x, str) else x)
+    except AttributeError:
+        df = df.applymap(lambda x: _normalize_text(x) if isinstance(x, str) else x)
+        
     df = df.replace(r'^\s*$', pd.NA, regex=True)
     df = df.dropna(how='all')
     df = df.drop_duplicates()
     df = _merge_debit_credit(df)
-    return df.reset_index(drop=True)
+    
+    return df.reset_index(drop=True), provider
 
 def _clean_mapped_dataframe(df: pd.DataFrame, dataset_type: str) -> pd.DataFrame:
     """
-    Cleans mapped values. STRICTLY avoids modifying Identifiers (Account, IMEI, Phone).
-    Only applies numeric cleaning to known amounts and durations. Validates dates.
+    Cleans mapped numeric and date values securely.
+    STRICTLY avoids modifying Identifiers.
     """
     numeric_columns = {
         "bank": ["Transaction_Amount"],
@@ -148,69 +251,102 @@ def _clean_mapped_dataframe(df: pd.DataFrame, dataset_type: str) -> pd.DataFrame
         "ipdr": ["Session_Date"]
     }
     
-    # 1. Clean monetary/duration fields
+    # Clean monetary/duration fields robustly
     for col in numeric_columns.get(dataset_type, []):
         if col in df.columns:
-            # Strip commas and currency symbols (₹, $, Cr, Dr)
-            df[col] = df[col].astype(str).str.replace(r'[,\₹\$\sCrDr]+', '', regex=True)
+            def _clean_num(val):
+                if pd.isna(val): return val
+                s = str(val).replace(',', '').replace('₹', '').replace('$', '').replace('Rs.', '').replace('Rs', '')
+                s = re.sub(r'(?i)\bcr\b|\bdr\b', '', s).strip()
+                return s if s else pd.NA
+                
+            df[col] = df[col].apply(_clean_num)
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    # 2. Normalize canonical date formats
+    # Normalize canonical date formats consistently
     for col in date_columns.get(dataset_type, []):
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True).dt.strftime('%Y-%m-%d')
+            df[col] = df[col].replace({np.nan: pd.NA, 'NaT': pd.NA})
 
     return df
 
 def _validate_schema(df: pd.DataFrame, dataset_type: str):
-    """Raises a validation error if critical foundational data is completely missing."""
+    """Raises robust validation errors ensuring output structural integrity."""
     critical_fields = {
         "bank": ["Date", "Transaction_Amount"],
         "cdr": ["Call_Date", "A_Party_Number"],
         "ipdr": ["Session_Date", "Source_IP_Address"]
     }
     
-    if df.empty:
-        raise ValueError("Schema validation failed: The extracted output is completely empty.")
+    if df.empty or df.isna().all(axis=None):
+        raise ValueError("Validation Failed: Extracted DataFrame is entirely empty or null.")
 
     for col in critical_fields.get(dataset_type, []):
-        if col in df.columns and df[col].isna().all():
-            raise ValueError(f"Schema validation failed: Critical column '{col}' is missing or entirely empty.")
+        if col not in df.columns:
+            raise ValueError(f"Validation Failed: Critical column '{col}' is entirely missing from schema.")
+        if df[col].isna().all():
+            raise ValueError(f"Validation Failed: Critical column '{col}' is present but completely empty.")
+
+def _print_parsing_summary(original_rows: int, retained_rows: int, 
+                           dataset_type: str, provider: Optional[str], 
+                           mapped_df: pd.DataFrame, final_csv_path: str):
+    """Logs an operational summary of the parsing execution."""
+    canonical = SCHEMAS[dataset_type]
+    present = [c for c in canonical if c in mapped_df.columns and not mapped_df[c].isna().all()]
+    missing = [c for c in canonical if c not in present]
+    
+    logger.info("=== PARSING SUMMARY ===")
+    logger.info(f"Dataset Type     : {dataset_type.upper()}")
+    logger.info(f"Provider Context : {provider if provider else 'Unknown'}")
+    logger.info(f"Rows Extracted   : {original_rows}")
+    logger.info(f"Rows Retained    : {retained_rows}")
+    logger.info(f"Columns Mapped   : {len(present)}/{len(canonical)}")
+    if missing:
+        logger.info(f"Missing Columns  : {', '.join(missing)}")
+    logger.info(f"Output Pathway   : {final_csv_path}")
+    logger.info("=======================")
 
 def parse_pdf(pdf_path: str, output_dir: str = ".") -> pd.DataFrame:
     """
-    Main PDF Parsing Pipeline. Converts an unstructured PDF directly 
-    into a mathematically rigorous, structurally sound canonical CSV.
+    Main PDF Parsing Pipeline. Converts unstructured PDFs directly 
+    into rigorously validated canonical CSVs suitable for downstream logic.
     """
     if not os.path.exists(pdf_path):
         raise FileNotFoundError(f"The PDF file at '{pdf_path}' was not found.")
         
     try:
-        # 1. Extract raw tabular blocks
+        logger.info(f"Initiating parsing for: {os.path.basename(pdf_path)}")
+        
+        # 1. Block Extraction
         raw_df = extract_tables_from_pdf(pdf_path)
+        original_rows = len(raw_df)
         
         # 2. Structural & Header Normalization
-        cleaned_df = _clean_raw_dataframe(raw_df)
+        cleaned_df, provider = _clean_raw_dataframe(raw_df)
+        retained_rows = len(cleaned_df)
         
         # 3. Intelligent Classification
         dataset_type = detect_dataset_type(list(cleaned_df.columns))
         
-        # 4. Canonical Projection (4-Tier matching)
+        # 4. Canonical Projection
         mapped_df = map_columns(cleaned_df, dataset_type)
         
-        # 5. Semantic Value Normalization (e.g. Comma stripping, Date parsing)
+        # 5. Semantic Value Normalization
         clean_mapped_df = _clean_mapped_dataframe(mapped_df, dataset_type)
         
-        # 6. Schema Enforcement & Strict Ordering
+        # 6. Strict Schema Enforcement
         final_df = ensure_schema(clean_mapped_df, dataset_type)
         
-        # 7. Final Sanity Validation
+        # 7. Quality Sanity Validation
         _validate_schema(final_df, dataset_type)
         
-        # 8. Dispatch to Disk
-        save_csv(final_df, dataset_type, output_dir)
+        # 8. Dispatch & Summarize
+        out_path = save_csv(final_df, dataset_type, output_dir)
+        _print_parsing_summary(original_rows, retained_rows, dataset_type, provider, mapped_df, out_path)
         
         return final_df
 
     except Exception as e:
-        raise RuntimeError(f"Failed to parse PDF '{pdf_path}': {str(e)}") from e
+        logger.error(f"Failed to parse PDF '{pdf_path}': {str(e)}")
+        raise
