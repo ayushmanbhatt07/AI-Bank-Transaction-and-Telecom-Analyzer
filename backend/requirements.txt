@@ -1,33 +1,5 @@
-# ==========================
-# FastAPI Backend
-# ==========================
-fastapi==0.116.1
-uvicorn[standard]==0.35.0
-python-multipart==0.0.20
-pydantic==2.11.7
-
-# ==========================
-# PDF Parsing
-# ==========================
-pdfplumber==0.11.7
-pdfminer.six==20250506
-pypdfium2==4.30.0
-
-# ==========================
-# Data Processing
-# ==========================
-pandas==2.3.1
-numpy==2.3.2
-
-# ==========================
-# Intelligent Schema Mapping
-# ==========================
-rapidfuzz==3.13.0
-sentence-transformers==5.0.0
-torch==2.8.0
-transformers==4.55.0
-
-# ==========================
-# Utilities
-# ==========================
-typing_extensions==4.15.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+pandas>=2.2.0
+pydantic>=2.6.0

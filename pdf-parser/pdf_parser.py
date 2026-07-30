@@ -13,7 +13,7 @@ import re
 import numpy as np
 import logging
 from typing import List, Optional, Tuple
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 
 from schema_mapper import (
     detect_dataset_type, 
@@ -195,26 +195,188 @@ def _remove_repeated_headers(df: pd.DataFrame) -> pd.DataFrame:
     return df[~mask].reset_index(drop=True)
 
 def _merge_debit_credit(df: pd.DataFrame) -> pd.DataFrame:
-    """Merges isolated Debit and Credit columns into a unified Transaction Amount column."""
-    cols = [str(c).lower().strip() for c in df.columns]
+    """Merges isolated Debit/Credit columns or Amount+DR/CR into signed Transaction_Amount."""
+    cols_lower = [str(c).lower().strip() for c in df.columns]
     
+    # Strategy 1: Separate debit and credit columns
     debit_col, credit_col = None, None
     debit_aliases = ['debit', 'withdrawal', 'dr']
     credit_aliases = ['credit', 'deposit', 'cr']
 
-    for original_col, lower_col in zip(df.columns, cols):
+    for original_col, lower_col in zip(df.columns, cols_lower):
         if lower_col in debit_aliases or any(fuzz.WRatio(a, lower_col) > 90 for a in debit_aliases):
             debit_col = original_col
         elif lower_col in credit_aliases or any(fuzz.WRatio(a, lower_col) > 90 for a in credit_aliases):
             credit_col = original_col
 
     if debit_col and credit_col:
-        s_debit = df[debit_col].replace(r'^\s*$', pd.NA, regex=True)
-        s_credit = df[credit_col].replace(r'^\s*$', pd.NA, regex=True)
-        df['Transaction_Amount_Merged'] = s_credit.combine_first(s_debit)
-        logger.info("Merged isolated Debit and Credit columns into single amount column.")
+        s_debit = pd.to_numeric(df[debit_col].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce')
+        s_credit = pd.to_numeric(df[credit_col].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce')
+        df['Transaction_Amount_Merged'] = s_credit.fillna(0) - s_debit.fillna(0)
+        # Remove zero amounts (both empty)
+        df.loc[(s_debit.isna()) & (s_credit.isna()), 'Transaction_Amount_Merged'] = pd.NA
+        logger.info("Merged isolated Debit and Credit columns into signed amount.")
+        return df
+
+    # Strategy 2: Single Amount column + DR/CR flag column
+    amount_col = None
+    drcr_col = None
+    for original_col, lower_col in zip(df.columns, cols_lower):
+        lower_clean = re.sub(r'[\s\(\)]', '', lower_col)
+        if "amount" in lower_clean and ("inr" in lower_clean or "rs" in lower_clean):
+            amount_col = original_col
+        if lower_col in {"dr/cr", "dr_cr", "drcr", "type", "dr / cr", "dr /cr"}:
+            drcr_col = original_col
+
+    if amount_col and drcr_col:
+        def to_signed(row):
+            try:
+                val = float(str(row[amount_col]).replace(",", "").replace("₹", "").replace("Rs.", "").replace("Rs", "").strip())
+            except (ValueError, TypeError):
+                return pd.NA
+            flag = str(row[drcr_col]).strip().upper()
+            if flag in {"DR", "D", "DEBIT", "DR."}:
+                return -abs(val)
+            if flag in {"CR", "C", "CREDIT", "CR."}:
+                return abs(val)
+            return val
+
+        df['Transaction_Amount_Merged'] = df.apply(to_signed, axis=1)
+        logger.info("Merged Amount(INR) and DR/CR into signed Transaction_Amount_Merged.")
+    
+    # Strategy 3: Single Amount column with DR/CR embedded in the same cell
+    elif amount_col:
+        def extract_signed(val):
+            if pd.isna(val):
+                return pd.NA
+            s = str(val).strip()
+            # Check for DR/CR suffix
+            dr_match = re.search(r'([\d,]+\.?\d*)\s*(DR|DEBIT)', s, re.IGNORECASE)
+            cr_match = re.search(r'([\d,]+\.?\d*)\s*(CR|CREDIT)', s, re.IGNORECASE)
+            if dr_match:
+                return -abs(float(dr_match.group(1).replace(",", "")))
+            if cr_match:
+                return abs(float(cr_match.group(1).replace(",", "")))
+            # Try plain number
+            try:
+                return float(re.sub(r'[^\d.]', '', s))
+            except ValueError:
+                return pd.NA
+        
+        df['Transaction_Amount_Merged'] = df[amount_col].apply(extract_signed)
+        logger.info("Extracted signed amount from single Amount column.")
 
     return df
+
+
+def _parse_transaction_particulars(df: pd.DataFrame) -> pd.DataFrame:
+    """Parse Transaction Particulars to extract mode, ID, beneficiary, and bank."""
+    if "Transaction_Mode" not in df.columns:
+        return df
+    
+    def parse_particulars(text):
+        if pd.isna(text):
+            return pd.Series([pd.NA, pd.NA, pd.NA, pd.NA])
+        
+        s = str(text).strip()
+        parts = [p.strip() for p in s.split('/') if p.strip()]
+        
+        mode = pd.NA
+        txn_id = pd.NA
+        beneficiary = pd.NA
+        bank = pd.NA
+        
+        if not parts:
+            return pd.Series([s, pd.NA, pd.NA, pd.NA])
+        
+        # Detect mode from first part
+        mode_keywords = {
+            'IMPS': 'IMPS', 'NEFT': 'NEFT', 'RTGS': 'RTGS', 'UPI': 'UPI',
+            'POS': 'POS', 'EDC': 'EDC', 'ATM': 'ATM', 'CASH': 'CASH',
+            'CHQ': 'CHEQUE', 'CHEQUE': 'CHEQUE', 'DR': 'DEBIT_CARD',
+            'CASHBACK': 'CASHBACK', 'INITIAL': 'INITIAL_FUNDING',
+            'OPENING': 'OPENING_BALANCE', 'CLOSING': 'CLOSING_BALANCE'
+        }
+        
+        first = parts[0].upper()
+        for keyword, canonical in mode_keywords.items():
+            if keyword in first:
+                mode = canonical
+                break
+        
+        if mode == 'IMPS' and len(parts) >= 2:
+            mode = f"IMPS_{parts[1]}" if parts[1] in ('P2A', 'P2P', 'P2M') else 'IMPS'
+        
+        if mode in ['POS', 'EDC'] and len(parts) >= 2:
+            txn_id = parts[-1] if parts[-1].isdigit() else pd.NA
+        
+        if mode == 'IMPS' and len(parts) >= 3:
+            txn_id = parts[2] if parts[2].isdigit() else pd.NA
+            # Look for bank name in parts
+            for part in parts[3:]:
+                if any(b in part.upper() for b in ['BANK', 'IDFC', 'HDFC', 'SBI', 'ICICI', 'AXIS', 'PNB']):
+                    bank = part
+                    break
+            # Beneficiary is usually the part after ID
+            if len(parts) >= 4 and not any(b in parts[3].upper() for b in ['BANK', 'X0']):
+                beneficiary = parts[3]
+        
+        # If no mode detected, keep original as mode
+        if pd.isna(mode):
+            mode = s
+        
+        return pd.Series([mode, txn_id, beneficiary, bank])
+    
+    parsed = df["Transaction_Mode"].apply(parse_particulars)
+    parsed.columns = ["Transaction_Mode_Clean", "Transaction_ID_Parsed", "Receiver_Customer_Name_Parsed", "Receiver_Bank_Name_Parsed"]
+    
+    # Only overwrite if we got meaningful parses
+    df["Transaction_Mode"] = parsed["Transaction_Mode_Clean"]
+    
+    # Safely set Transaction_ID — create if missing
+    if "Transaction_ID" not in df.columns:
+        df["Transaction_ID"] = parsed["Transaction_ID_Parsed"]
+    else:
+        df["Transaction_ID"] = df["Transaction_ID"].fillna(parsed["Transaction_ID_Parsed"])
+    
+    # Safely set Receiver_Customer_Name — create if missing
+    if "Receiver_Customer_Name" not in df.columns:
+        df["Receiver_Customer_Name"] = parsed["Receiver_Customer_Name_Parsed"]
+    else:
+        df["Receiver_Customer_Name"] = df["Receiver_Customer_Name"].fillna(parsed["Receiver_Customer_Name_Parsed"])
+    
+    # Safely set Receiver_Bank_Name — create if missing
+    if "Receiver_Bank_Name" not in df.columns:
+        df["Receiver_Bank_Name"] = parsed["Receiver_Bank_Name_Parsed"]
+    else:
+        df["Receiver_Bank_Name"] = df["Receiver_Bank_Name"].fillna(parsed["Receiver_Bank_Name_Parsed"])
+    
+    return df
+
+
+def _remove_summary_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove opening balance, closing balance, and total rows."""
+    if "Transaction_Mode" not in df.columns:
+        return df
+    
+    summary_patterns = [
+        r'^\s*OPENING\s+BALANCE\s*$',
+        r'^\s*CLOSING\s+BALANCE\s*$',
+        r'^\s*TRANSACTION\s+TOTAL\s*',
+        r'^\s*BROUGHT\s+FORWARD\s*$',
+        r'^\s*CARRIED\s+FORWARD\s*$',
+    ]
+    
+    mask = df["Transaction_Mode"].astype(str).str.strip().str.upper().apply(
+        lambda x: not any(re.match(p, x, re.IGNORECASE) for p in summary_patterns)
+    )
+    
+    removed = len(df) - mask.sum()
+    if removed > 0:
+        logger.info(f"Removed {removed} summary rows (opening/closing balance, totals).")
+    
+    return df[mask].reset_index(drop=True)
+
 
 def _clean_raw_dataframe(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[str]]:
     """Applies robust, pre-mapping structural normalizations safely."""
@@ -241,7 +403,7 @@ def _clean_mapped_dataframe(df: pd.DataFrame, dataset_type: str) -> pd.DataFrame
     STRICTLY avoids modifying Identifiers.
     """
     numeric_columns = {
-        "bank": ["Transaction_Amount"],
+        "bank": ["Transaction_Amount", "Transaction_Amount_Merged"],
         "cdr": ["Call_Duration_Seconds"],
         "ipdr": ["Session_Duration_Seconds"]
     }
@@ -255,7 +417,8 @@ def _clean_mapped_dataframe(df: pd.DataFrame, dataset_type: str) -> pd.DataFrame
     for col in numeric_columns.get(dataset_type, []):
         if col in df.columns:
             def _clean_num(val):
-                if pd.isna(val): return val
+                if pd.isna(val): 
+                    return val
                 s = str(val).replace(',', '').replace('₹', '').replace('$', '').replace('Rs.', '').replace('Rs', '')
                 s = re.sub(r'(?i)\bcr\b|\bdr\b', '', s).strip()
                 return s if s else pd.NA
@@ -268,6 +431,18 @@ def _clean_mapped_dataframe(df: pd.DataFrame, dataset_type: str) -> pd.DataFrame
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True).dt.strftime('%Y-%m-%d')
             df[col] = df[col].replace({np.nan: pd.NA, 'NaT': pd.NA})
+
+    # Bank-specific post-processing
+    if dataset_type == "bank":
+        # Fallback: copy merged amount to Transaction_Amount if latter is empty/missing
+        if "Transaction_Amount_Merged" in df.columns:
+            if "Transaction_Amount" not in df.columns:
+                df["Transaction_Amount"] = df["Transaction_Amount_Merged"]
+            else:
+                df["Transaction_Amount"] = df["Transaction_Amount"].fillna(df["Transaction_Amount_Merged"])
+        
+        df = _parse_transaction_particulars(df)
+        df = _remove_summary_rows(df)
 
     return df
 
@@ -284,8 +459,17 @@ def _validate_schema(df: pd.DataFrame, dataset_type: str):
 
     for col in critical_fields.get(dataset_type, []):
         if col not in df.columns:
+            # Fallback for merged amount
+            if col == "Transaction_Amount" and "Transaction_Amount_Merged" in df.columns:
+                df["Transaction_Amount"] = df["Transaction_Amount_Merged"]
+                continue
             raise ValueError(f"Validation Failed: Critical column '{col}' is entirely missing from schema.")
         if df[col].isna().all():
+            # Fallback for merged amount
+            if col == "Transaction_Amount" and "Transaction_Amount_Merged" in df.columns:
+                df["Transaction_Amount"] = df["Transaction_Amount_Merged"]
+                if not df[col].isna().all():
+                    continue
             raise ValueError(f"Validation Failed: Critical column '{col}' is present but completely empty.")
 
 def _print_parsing_summary(original_rows: int, retained_rows: int, 

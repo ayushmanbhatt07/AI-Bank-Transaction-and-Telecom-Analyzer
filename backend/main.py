@@ -1,69 +1,55 @@
-"""
-main.py
+"""Main FastAPI application for the AI Telecom Bank Analyzer backend."""
 
-Entry point for the FastAPI backend. Initializes the application, configures
-system paths for external module imports, sets up logging, and registers routers.
-"""
-
-import sys
 import logging
+import sys
 from pathlib import Path
+
+# Ensure the backend directory is on sys.path so that `pdf` resolves correctly
+_backend_dir = Path(__file__).resolve().parent
+if str(_backend_dir) not in sys.path:
+    sys.path.insert(0, str(_backend_dir))
+
+# Ensure pdf-parser/ is on sys.path so that `from pdf_parser import parse_pdf` works
+_project_root = _backend_dir.parent
+_pdf_parser_path = _project_root / "pdf-parser"
+if str(_pdf_parser_path) not in sys.path:
+    sys.path.insert(0, str(_pdf_parser_path))
+
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
 
-# ==========================================
-# SYSTEM PATH CONFIGURATION
-# ==========================================
-# Resolve the project root (AI-Telecom-Bank-Analyzer) and add pdf-parser to sys.path
-# Current file is at: AI-Telecom-Bank-Analyzer/backend/app/main.py
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-PDF_PARSER_DIR = PROJECT_ROOT / "pdf-parser"
+from pdf.config import PROJECT_NAME, VERSION
+from pdf.logging_config import get_logger
+from pdf.router import router as pdf_router
 
-if str(PDF_PARSER_DIR) not in sys.path:
-    sys.path.append(str(PDF_PARSER_DIR))
-
-# ==========================================
-# APP IMPORTS
-# ==========================================
-# These must be imported after sys.path modification to ensure 
-# underlying services can import from pdf-parser without issues.
-from app.api.parser import router as parser_router
-from app.core.config import settings
-from app.core.logging_config import setup_logging
-
-# Initialize logging
-setup_logging()
-logger = logging.getLogger(__name__)
-
-# Initialize FastAPI app
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    version=settings.VERSION,
-    description="API for the AI Telecom Bank Analyzer PDF Parser"
+# Configure root logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 
-# Register API Routers
-app.include_router(parser_router, prefix="/api/v1/parser", tags=["Parser"])
+logger = get_logger(__name__)
 
-# ==========================================
-# BASE ENDPOINTS
-# ==========================================
+app = FastAPI(
+    title=PROJECT_NAME,
+    version=VERSION,
+    description="Backend API for parsing Bank, CDR, and IPDR PDFs.",
+)
+
+app.include_router(pdf_router)
+
 
 @app.get("/")
-async def root() -> JSONResponse:
-    """Root endpoint verifying service identity and status."""
-    return JSONResponse(
-        content={
-            "service": "AI Telecom Bank Analyzer Backend",
-            "status": "running"
-        }
-    )
+def root() -> dict[str, str]:
+    """Root endpoint."""
+    return {
+        "name": PROJECT_NAME,
+        "version": VERSION,
+        "status": "running",
+    }
+
 
 @app.get("/health")
-async def health_check() -> JSONResponse:
-    """Health check endpoint for orchestration/monitoring."""
-    return JSONResponse(
-        content={
-            "status": "healthy"
-        }
-    )
+def health() -> dict[str, str]:
+    """Health check endpoint."""
+    return {"status": "healthy"}
