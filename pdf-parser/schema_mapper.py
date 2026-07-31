@@ -56,36 +56,217 @@ SCHEMAS = {
 # ==========================================
 
 BANK_ALIASES = {
-    "Date": ["Txn Date", "Transaction Date", "Posting Date", "Value Date", "Date", "Booking Date", "Tran Date"],
-    "Txn_Ref_Number": ["UTR Number", "Reference", "Ref No", "Reference Number", "Reference No.", "Cheque/Ref No.", "Transaction ID", "Transaction Reference", "UTR", "Cheque Number", "Chq No"],
-    "Transaction_Amount": ["Amount", "Txn Amount", "Transaction Amount", "Transfer Amount", "Transaction_Amount_Merged"], 
-    "Sender_Account_Number": ["Account No", "A/C No", "Sender A/C", "Account Number", "Account", "Debit Account", "Source Account"],
-    "Receiver_Account_Number": ["Beneficiary Account", "Receiver Account", "Destination Account", "Credit Account"],
-    "Transaction_Mode": ["Mode", "Type", "Particulars", "Description", "Remarks", "Narration", "Transaction Details", "Details"],
-    "Sender_Phone_Number": ["Mobile", "Phone", "Contact", "Phone Number", "Mobile No"],
-    "Sender_IFSC": ["IFSC", "IFSC Code", "Sender IFSC"],
+    "Date": [
+        "Txn Date", "Transaction Date", "Posting Date", "Value Date", "Date",
+        "Booking Date", "Tran Date", "Tran Date", "Transaction Date", "Value Dt",
+        "Tran Dt", "Txn Dt", "Dt"
+    ],
+    "Txn_Ref_Number": [
+        "UTR Number", "Reference", "Ref No", "Reference Number", "Reference No.",
+        "Cheque/Ref No.", "Transaction ID", "Transaction Reference", "UTR",
+        "Cheque Number", "Chq No", "Chq No.", "Cheque No", "Cheque No.",
+        "Ref. No.", "Ref No.", "Txn Ref", "Transaction Ref", "Chq.No",
+        "Chq/Ref No", "Chq / Ref No", "Reference No", "Cheque/Ref.No.",
+        "Chq.No.", "Chq/Ref", "Chq/Ref.", "UTR No", "UTRNo"
+    ],
+    "Transaction_Amount": [
+        "Amount", "Txn Amount", "Transaction Amount", "Transfer Amount",
+        "Transaction_Amount_Merged", "Amount(INR)", "Amount (INR)",
+        "Amt", "Amt (INR)", "Amount INR", "Txn Amt", "Debit Amount",
+        "Credit Amount", "Withdrawal Amt", "Deposit Amt", "Amount (Rs.)",
+        "Amount(Rs.)", "Amt.", "Txn Amt.", "Amount (INR)", "Amt(INR)",
+        "Amt (INR)", "Amount INR", "Amount in INR", "INR Amount",
+        "Rs.", "Rs", "Rupees", "Amount (Rs)", "Amt (Rs)", "Amt(Rs)",
+        "Withdrawal", "Deposit", "Debit", "Credit", "Dr Amount", "Cr Amount"
+    ],
+    "Sender_Account_Number": [
+        "Account No", "A/C No", "Sender A/C", "Account Number", "Account",
+        "Debit Account", "Source Account", "A/c No.", "Acct No", "Acct Number",
+        "A/C Number", "Acc No", "Acc Number", "Account No.", "Acct No.",
+        "Sender Account", "Sender Account Number", "From Account"
+    ],
+    "Receiver_Account_Number": [
+        "Beneficiary Account", "Receiver Account", "Destination Account",
+        "Credit Account", "Beneficiary A/C", "Receiver A/C",
+        "Beneficiary A/C No", "Receiver Account Number", "To Account",
+        "Credit A/C", "Beneficiary Account Number", "Receiver Acc No"
+    ],
+    "Transaction_Mode": [
+        "Mode", "Type", "Particulars", "Description", "Remarks", "Narration",
+        "Transaction Details", "Details", "Transaction Particulars",
+        "Txn Particulars", "Particulars", "Narration", "Description",
+        "Transaction Description", "Txn Description", "Transaction Particulars",
+        "Txn Details", "Transaction Narration", "Txn Narration", "Particulars",
+        "Transaction Type", "Txn Type", "Mode of Transaction", "Payment Mode"
+    ],
+    "Sender_Phone_Number": [
+        "Mobile", "Phone", "Contact", "Phone Number", "Mobile No", "Mobile Number",
+        "Contact Number", "Phone No.", "Sender Mobile", "Sender Phone",
+        "Sender Contact", "From Mobile", "From Phone"
+    ],
+    "Sender_IFSC": [
+        "IFSC", "IFSC Code", "Sender IFSC", "IFSC_Code", "Ifsc Code",
+        "IFSC_Code", "Sender IFSC Code", "From IFSC", "IFSC Code:"
+    ],
+    "Transaction_ID": [
+        "Transaction ID", "Txn ID", "Transaction No", "Txn No", "Txn Number",
+        "Transaction Number", "Voucher No", "Voucher Number", "Txn ID",
+        "Transaction Ref No", "Ref ID", "Transaction Ref", "Txn Ref",
+        "Reference ID", "Transaction Reference Number", "Txn Ref No"
+    ],
+    "Timestamp": [
+        "Time", "Txn Time", "Transaction Time", "Time Stamp", "Timestamp",
+        "Entry Time", "Posting Time", "Transaction Timestamp", "Txn Timestamp",
+        "Value Time", "Tran Time"
+    ],
+    "Currency": [
+        "Curr", "Currency", "CCY", "Cur", "Currency Code", "Currency Type",
+        "Txn Currency", "Transaction Currency"
+    ],
+    "Sender_Customer_Name": [
+        "Customer Name", "Sender Name", "Account Holder", "Holder Name",
+        "Customer", "Sender", "From Name", "Remitter Name", "Account Holder Name",
+        "Sender's Name", "Remitter", "Drawer"
+    ],
+    "Sender_Bank_Name": [
+        "Bank", "Bank Name", "Sender Bank", "From Bank", "Remitter Bank",
+        "Branch Name", "Branch", "Bank/Branch", "Sender Bank Name",
+        "Remitting Bank", "Drawee Bank", "Bank/Branch Name"
+    ],
+    "Sender_Account_Type": [
+        "Account Type", "A/C Type", "Acct Type", "Type of Account", "Scheme",
+        "Sender Account Type", "From Account Type", "Account Category"
+    ],
+    "Receiver_Customer_Name": [
+        "Beneficiary Name", "Receiver Name", "To Name", "Beneficiary",
+        "Payee Name", "Payee", "Receiver's Name", "Beneficiary's Name",
+        "Creditor Name", "Recipient Name"
+    ],
+    "Receiver_Bank_Name": [
+        "Beneficiary Bank", "To Bank", "Receiver Bank", "Payee Bank",
+        "Beneficiary Bank Name", "Receiving Bank", "Credit Bank",
+        "Recipient Bank", "Destination Bank"
+    ],
+    "Receiver_Account_Type": [
+        "Beneficiary Account Type", "Receiver A/C Type", "To Account Type",
+        "Receiver Account Type", "Beneficiary A/C Type", "Credit Account Type"
+    ],
+    "Receiver_IFSC": [
+        "Beneficiary IFSC", "Receiver IFSC", "To IFSC", "Beneficiary IFSC Code",
+        "Receiver IFSC Code", "Payee IFSC", "Credit IFSC", "Destination IFSC"
+    ],
+    "Receiver_Phone_Number": [
+        "Beneficiary Mobile", "Receiver Mobile", "To Mobile", "Beneficiary Phone",
+        "Receiver Phone", "Payee Phone", "Receiver Phone Number",
+        "Beneficiary Phone Number", "Payee Mobile", "Recipient Phone"
+    ],
+    "Sender_Customer_ID": [
+        "Customer ID", "Cust ID", "Sender ID", "Client ID", "CIF", "CIF No",
+        "Customer Identification", "Sender Customer ID", "From Customer ID",
+        "CIF Number", "Cust ID No"
+    ],
+    "Receiver_Customer_ID": [
+        "Beneficiary ID", "Receiver ID", "To Customer ID", "Beneficiary Cust ID",
+        "Receiver Customer ID", "Payee ID", "Beneficiary Customer ID",
+        "Recipient ID", "Creditor ID"
+    ],
 }
 
 CDR_ALIASES = {
-    "Call_Date": ["Date", "Call Date", "Start Date"],
-    "Call_Start_Time": ["Time", "Start Time", "Call Time"],
-    "A_Party_Number": ["Calling Number", "Originating Number", "Caller", "A Party", "Calling No", "A Number"],
-    "B_Party_Number": ["Called Number", "Destination Number", "Receiver", "B Party", "Called No", "B Number"],
-    "Call_Duration_Seconds": ["Duration", "Call Duration", "Time (sec)", "Duration (s)", "Secs", "Total Duration"],
-    "First_BTS_Location": ["Location", "Tower Location", "BTS", "Site ID", "Cell Site", "Address"],
-    "Call_Type": ["Type", "Call Type", "Voice/SMS", "Service Type"],
-    "IMSI": ["IMSI Number", "Subscriber IMSI"],
-    "IMEI": ["IMEI Number", "Handset IMEI", "Device IMEI"],
+    "Call_Date": ["Date", "Call Date", "Start Date", "Call Dt", "Date of Call", "Call Date"],
+    "Call_Start_Time": ["Time", "Start Time", "Call Time", "Call Start Time", "Time of Call", "Call Time"],
+    "A_Party_Number": [
+        "Calling Number", "Originating Number", "Caller", "A Party", "Calling No",
+        "A Number", "Calling Party", "Origin Number", "From Number", "A-Party",
+        "Calling No.", "A Party Number", "Origin No"
+    ],
+    "B_Party_Number": [
+        "Called Number", "Destination Number", "Receiver", "B Party", "Called No",
+        "B Number", "Called Party", "Destination Party", "To Number", "B-Party",
+        "Called No.", "B Party Number", "Destination No", "Recipient Number"
+    ],
+    "Call_Duration_Seconds": [
+        "Duration", "Call Duration", "Time (sec)", "Duration (s)", "Secs",
+        "Total Duration", "Call Duration (sec)", "Duration Sec", "Dur (sec)",
+        "Duration in Sec", "Call Duration (s)", "Duration (Seconds)", "Duration Seconds"
+    ],
+    "First_BTS_Location": [
+        "Location", "Tower Location", "BTS", "Site ID", "Cell Site", "Address",
+        "BTS Location", "Tower Address", "Site Address", "BTS Address",
+        "Cell Tower Location", "First BTS Location", "Tower ID"
+    ],
+    "Call_Type": [
+        "Type", "Call Type", "Voice/SMS", "Service Type", "Call Nature",
+        "Communication Type", "Direction", "Call Direction", "Service",
+        "Call Service Type", "Communication Mode"
+    ],
+    "IMSI": ["IMSI Number", "Subscriber IMSI", "IMSI No", "IMSI Code", "IMSI ID"],
+    "IMEI": ["IMEI Number", "Handset IMEI", "Device IMEI", "IMEI No", "IMEI Code", "IMEI ID"],
+    "First_Cell_Global_ID": [
+        "Cell ID", "CGI", "Cell Global ID", "Global Cell ID", "Cell Identifier",
+        "Cell Global Identifier", "First Cell ID", "CGI Code", "Cell ID Code"
+    ],
+    "Roaming_Network_Circle": [
+        "Roaming Circle", "Network Circle", "Circle", "Roaming Network", "Network",
+        "Roaming Zone", "Network Zone", "Circle Name", "Roaming Area"
+    ],
+    "CDR_ID": [
+        "CDR ID", "Record ID", "Call Record ID", "Record Number", "CDR Number",
+        "Call Record Number", "CDR Record ID", "Record ID Number"
+    ],
 }
 
 IPDR_ALIASES = {
-    "Session_Date": ["Date", "Session Date", "Start Date"],
-    "Session_Start_Time": ["Time", "Start Time", "Session Time"],
-    "Source_IP_Address": ["Src IP", "Source IP", "Origin IP", "Private IP", "Framed IP"],
-    "Destination_IP_Address": ["Dest IP", "Destination IP", "Target IP", "Server IP"],
-    "Destination_Port": ["Dest Port", "Target Port", "Port", "Server Port"],
-    "Session_Duration_Seconds": ["Duration", "Time (sec)", "Uptime", "Session Duration"],
-    "Subscriber_MSISDN": ["MSISDN", "Mobile Number", "Phone Number"],
+    "Session_Date": [
+        "Date", "Session Date", "Start Date", "Session Dt", "Date of Session",
+        "Session Start Date", "IPDR Date"
+    ],
+    "Session_Start_Time": [
+        "Time", "Start Time", "Session Time", "Session Start Time", "Time of Session",
+        "Session Timestamp", "IPDR Time", "Session Start Timestamp"
+    ],
+    "Source_IP_Address": [
+        "Src IP", "Source IP", "Origin IP", "Private IP", "Framed IP",
+        "Source IP Address", "Client IP", "User IP", "Originating IP",
+        "Source IP Addr", "Src IP Address", "Local IP"
+    ],
+    "Destination_IP_Address": [
+        "Dest IP", "Destination IP", "Target IP", "Server IP", "Destination IP Address",
+        "Dst IP", "Remote IP", "Destination IP Addr", "Dest IP Address",
+        "Target IP Address", "External IP", "Server IP Address"
+    ],
+    "Destination_Port": [
+        "Dest Port", "Target Port", "Port", "Server Port", "Destination Port",
+        "Dst Port", "Service Port", "Target Port Number", "Destination Port Number",
+        "Port Number", "Server Port Number"
+    ],
+    "Session_Duration_Seconds": [
+        "Duration", "Time (sec)", "Uptime", "Session Duration", "Session Duration (sec)",
+        "Duration Sec", "Dur (sec)", "Session Duration (s)", "Duration Seconds",
+        "Session Time", "Connection Duration", "Session Length"
+    ],
+    "Subscriber_MSISDN": [
+        "MSISDN", "Mobile Number", "Phone Number", "Subscriber Number", "Mobile No",
+        "Cellular Number", "MSISDN Number", "Subscriber Mobile", "Subscriber Phone",
+        "MSISDN No", "Mobile Number", "Cell Number"
+    ],
+    "Subscriber_IMSI": [
+        "IMSI", "Subscriber IMSI", "IMSI Number", "IMSI No", "Subscriber IMSI Number",
+        "IMSI Code", "IMSI ID", "Subscriber IMSI Code"
+    ],
+    "Device_IMEI": [
+        "IMEI", "Device IMEI", "IMEI Number", "Handset IMEI", "IMEI No",
+        "Device IMEI Number", "IMEI Code", "IMEI ID", "Handset IMEI Number"
+    ],
+    "Cell_Global_ID": [
+        "Cell ID", "CGI", "Cell Global ID", "Global Cell ID", "Cell Identifier",
+        "Cell Global Identifier", "CGI Code", "Cell ID Code", "Location ID",
+        "Cell Location ID", "Global Cell Identifier"
+    ],
+    "IPDR_ID": [
+        "IPDR ID", "Record ID", "Session Record ID", "Record Number", "IPDR Number",
+        "IPDR Record ID", "Session ID", "Record ID Number", "IPDR Record Number"
+    ],
 }
 
 ALIASES = {
@@ -253,6 +434,8 @@ def map_columns(df: pd.DataFrame, dataset_type: str) -> pd.DataFrame:
         if best_match:
             mapping[col] = best_match
             used_canonical.add(best_match)
+        else:
+            logger.warning(f"Unmapped column '{col}' could not be matched to any canonical field.")
             
     df_mapped = df.rename(columns=mapping)
     columns_to_keep = [col for col in df_mapped.columns if col in SCHEMAS[dataset_type]]
