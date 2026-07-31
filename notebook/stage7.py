@@ -48,7 +48,7 @@ def load_and_label(path_a: str, path_b: str, path_c: str, path_gt: str):
 df_a, df_b, df_c = load_and_label(PATH_A, PATH_B, PATH_C, PATH_GT)
 
 
-'''def temporal_split(df: pd.DataFrame, time_col: str = 'transaction_timestamp', train_ratio=0.70, val_ratio=0.15):
+def temporal_split(df: pd.DataFrame, time_col: str = 'transaction_timestamp', train_ratio=0.70, val_ratio=0.15):
     df_sorted = df.sort_values(by=time_col).reset_index(drop=True)
     n = len(df_sorted)
     
@@ -142,4 +142,4 @@ datasets = {
     'Set A (Bank)': (train_a, val_a, test_a),
     'Set B (Bank + CDR)': (train_b, val_b, test_b),
     'Set C (Bank + CDR + IPDR)': (train_c, val_c, test_c)
-}'''
+}
