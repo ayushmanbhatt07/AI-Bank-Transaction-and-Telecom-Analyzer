@@ -224,3 +224,4 @@ __marimo__/
 .streamlit/secrets.toml
 *.stats
 
+machine_learning/
