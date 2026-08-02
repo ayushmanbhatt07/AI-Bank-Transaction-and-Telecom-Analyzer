@@ -13,7 +13,11 @@ import os
 import re
 import numpy as np
 import logging
+<<<<<<< HEAD
 from typing import List, Optional, Tuple, Dict, Any
+=======
+from typing import List, Optional, Tuple, Dict
+>>>>>>> 05ef81144c0cd7a8d4fbb89e7eaef044c971d606
 
 from rapidfuzz import fuzz, process
 
@@ -47,6 +51,7 @@ class PDFExtractionError(Exception):
     """Raised when no tabular data can be extracted from the PDF after all strategies."""
     pass
 
+<<<<<<< HEAD
 
 # ==========================================
 # MINIMUM REQUIRED FIELDS (relaxed validation)
@@ -77,6 +82,77 @@ MINIMUM_REQUIRED_FIELDS = {
 # ==========================================
 # TEXT NORMALIZATION
 # ==========================================
+=======
+# ==========================================
+# KNOWN BANKS & NORMALIZATION
+# ==========================================
+
+_KNOWN_BANKS = [
+    "AXIS BANK", "STATE BANK OF INDIA", "HDFC BANK", "ICICI BANK",
+    "PUNJAB NATIONAL BANK", "BANK OF BARODA", "CANARA BANK",
+    "UNION BANK OF INDIA", "INDIAN BANK", "IDFC FIRST BANK",
+    "KOTAK MAHINDRA BANK", "YES BANK", "BANK OF INDIA",
+    "CENTRAL BANK OF INDIA", "INDIAN OVERSEAS BANK", "UCO BANK",
+    "BANK OF MAHARASHTRA", "CITY UNION BANK", "FEDERAL BANK",
+    "SOUTH INDIAN BANK", "KARUR VYSYA BANK", "BANDHAN BANK",
+    "RBL BANK", "INDUSIND BANK", "DBS BANK", "CITI BANK",
+    "STANDARD CHARTERED BANK", "HSBC BANK", "JANA SMALL FINANCE BANK",
+    "AU SMALL FINANCE BANK", "ESAF SMALL FINANCE BANK",
+    "EQUITAS SMALL FINANCE BANK", "UJJIVAN SMALL FINANCE BANK",
+    "NORTH EAST SMALL FINANCE BANK", "SHIVALIK SMALL FINANCE BANK",
+    "UNITY SMALL FINANCE BANK", "FINCARE SMALL FINANCE BANK",
+    "ANDHRA BANK", "CORPORATION BANK", "ORIENTAL BANK OF COMMERCE",
+    "SYNDICATE BANK", "VIJAYA BANK", "DENA BANK", "ALLAHABAD BANK",
+    "UNITED BANK OF INDIA"
+]
+
+_BANK_NAME_NORMALIZATION = {
+    "AXIS BANK": "Axis Bank",
+    "STATE BANK OF INDIA": "State Bank of India",
+    "HDFC BANK": "HDFC Bank",
+    "ICICI BANK": "ICICI Bank",
+    "PUNJAB NATIONAL BANK": "Punjab National Bank",
+    "BANK OF BARODA": "Bank of Baroda",
+    "CANARA BANK": "Canara Bank",
+    "UNION BANK OF INDIA": "Union Bank of India",
+    "INDIAN BANK": "Indian Bank",
+    "IDFC FIRST BANK": "IDFC First Bank",
+    "KOTAK MAHINDRA BANK": "Kotak Mahindra Bank",
+    "YES BANK": "Yes Bank",
+    "BANK OF INDIA": "Bank of India",
+    "CENTRAL BANK OF INDIA": "Central Bank of India",
+    "INDIAN OVERSEAS BANK": "Indian Overseas Bank",
+    "UCO BANK": "UCO Bank",
+    "BANK OF MAHARASHTRA": "Bank of Maharashtra",
+    "CITY UNION BANK": "City Union Bank",
+    "FEDERAL BANK": "Federal Bank",
+    "SOUTH INDIAN BANK": "South Indian Bank",
+    "KARUR VYSYA BANK": "Karur Vysya Bank",
+    "BANDHAN BANK": "Bandhan Bank",
+    "RBL BANK": "RBL Bank",
+    "INDUSIND BANK": "IndusInd Bank",
+    "DBS BANK": "DBS Bank",
+    "CITI BANK": "Citi Bank",
+    "STANDARD CHARTERED BANK": "Standard Chartered Bank",
+    "HSBC BANK": "HSBC Bank",
+}
+
+_PROVIDER_KEYWORDS = {
+    "AXIS BANK": ["AXIS"],
+    "STATE BANK OF INDIA": ["SBI"],
+    "HDFC BANK": ["HDFC"],
+    "ICICI BANK": ["ICICI"],
+    "PUNJAB NATIONAL BANK": ["PNB"],
+    "BANK OF BARODA": ["BOB"],
+    "CANARA BANK": ["CANARA"],
+    "UNION BANK OF INDIA": ["UNION"],
+    "INDIAN BANK": ["INDIAN BANK"],
+    "IDFC FIRST BANK": ["IDFC"],
+    "KOTAK MAHINDRA BANK": ["KOTAK"],
+    "YES BANK": ["YES BANK"],
+    "BANK OF INDIA": ["BANK OF INDIA"],
+}
+>>>>>>> 05ef81144c0cd7a8d4fbb89e7eaef044c971d606
 
 def _normalize_text(text: str) -> str:
     """Removes strange unicode characters, newlines, tabs, and trims whitespace."""
@@ -87,6 +163,7 @@ def _normalize_text(text: str) -> str:
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
+<<<<<<< HEAD
 
 # ==========================================
 # AMOUNT PARSING
@@ -183,12 +260,312 @@ def _detect_provider_metadata(df: pd.DataFrame) -> Optional[str]:
     """Internal mechanism to log potential data providers, zero impact on schema."""
     providers = ["SBI", "HDFC", "ICICI", "Axis", "PNB", "BOB", "Airtel", "Jio", "Vi", "BSNL",
                  "Kotak", "IndusInd", "Yes Bank", "Federal", "Canara", "Union", "IOB", "RBL"]
+=======
+# ==========================================
+# METADATA EXTRACTION HELPERS
+# ==========================================
+
+def _find_bank_name(text: str, text_upper: str) -> Optional[str]:
+    """
+    Finds a known bank name in the text using word boundaries.
+    Returns None if no known bank is found to prevent branch names 
+    from being misclassified as bank names.
+    """
+    found_banks = {}
+    for bank in _KNOWN_BANKS:
+        pattern = r'\b' + re.escape(bank) + r'\b'
+        matches = list(re.finditer(pattern, text_upper))
+        if matches:
+            found_banks[bank] = len(matches)
+    
+    if found_banks:
+        best_bank = max(found_banks, key=found_banks.get)
+        return _BANK_NAME_NORMALIZATION.get(best_bank, best_bank.title())
+    
+    return None
+
+def _detect_provider_from_text(text_upper: str) -> Optional[str]:
+    """
+    Fallback provider detection from raw text when no explicit bank name is found.
+    """
+    for bank_name, keywords in _PROVIDER_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword in text_upper:
+                return _BANK_NAME_NORMALIZATION.get(bank_name, bank_name.title())
+    return None
+
+def _find_account_number(text: str) -> Optional[str]:
+    """Extracts account number from statement text using multiple strategies."""
+    # Strategy 1: Label-based extraction with flexible spacing
+    label_patterns = [
+        r'(?i)(?:a/c|account|acct|sb|savings?|current)\s*(?:a/c)?\s*(?:no|number|#)?\s*[:.]?\s*([X\d][A-Za-z0-9X\s\-]{5,24})',
+        r'(?i)account\s*(?:number|no\.?|#)\s*[:.]?\s*([X\d][A-Za-z0-9X\s\-]{5,24})',
+    ]
+    
+    for pattern in label_patterns:
+        match = re.search(pattern, text)
+        if match:
+            candidate = re.sub(r'\s+', '', match.group(1)).strip()
+            # Filter out dates
+            if re.match(r'^\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}$', candidate):
+                continue
+            # Must contain digits and be reasonable length
+            if len(candidate) >= 6 and any(c.isdigit() for c in candidate):
+                return candidate
+    
+    # Strategy 2: Contextual patterns for masked/unmasked numbers
+    context_patterns = [
+        r'(?i)account\s*(?:number|no)?\s*[:.]?\s*([X\d]{4,20})',
+        r'(?i)a/c\s*(?:no)?\s*[:.]?\s*([X\d]{4,20})',
+    ]
+    
+    for pattern in context_patterns:
+        match = re.search(pattern, text)
+        if match:
+            candidate = match.group(1).strip()
+            if len(candidate) >= 6 and any(c.isdigit() for c in candidate):
+                return candidate
+    
+    return None
+
+def _find_ifsc(text: str) -> Optional[str]:
+    """Extracts IFSC code from text using label and standalone patterns."""
+    # Strategy 1: Explicit IFSC label
+    label_pattern = r'(?:IFSC|IFSC\s*CODE|IFSC:)\s*[:.]?\s*([A-Za-z]{4}0[A-Za-z0-9]{6})'
+    match = re.search(label_pattern, text, re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+    
+    # Strategy 2: Standalone IFSC pattern with known prefix validation
+    standalone_pattern = r'\b([A-Za-z]{4}0[A-Za-z0-9]{6})\b'
+    matches = re.findall(standalone_pattern, text)
+    
+    known_prefixes = {
+        'UTIB', 'SBIN', 'HDFC', 'ICIC', 'PUNB', 'BARB', 'CNRB', 'UBIN', 
+        'IDFB', 'KKBK', 'YESB', 'BKID', 'IOBA', 'MAHB', 'SYNB', 'ALLA', 
+        'ANDH', 'CBIN', 'CORP', 'DEN', 'FED', 'INDB', 'JAKA', 'KARB', 
+        'KNSB', 'LAVB', 'MEGH', 'NKGS', 'OIBA', 'PSIB', 'RATN', 'SIBL', 
+        'TMBL', 'TNSC', 'UBSW', 'UCBA', 'UTBI', 'VIJB', 'VYSA'
+    }
+    
+    for m in matches:
+        if m[:4].upper() in known_prefixes:
+            return m.upper()
+    
+    # Fallback: return first match if any
+    if matches:
+        return matches[0].upper()
+    
+    return None
+
+def _find_customer_name(text: str) -> Optional[str]:
+    """Extracts customer/account holder name from statement text."""
+    patterns = [
+        r'(?:Customer\s*Name|Account\s*Holder|Holder\s*Name|Customer)\s*[:.]?\s*(Mr\.?|Mrs\.?|Ms\.?|Dr\.?)?\s*([A-Za-z][A-Za-z\s\.]{1,40})',
+        r'(?:Name\s*[:.]\s*)(Mr\.?|Mrs\.?|Ms\.?|Dr\.?)?\s*([A-Za-z][A-Za-z\s\.]{1,40})',
+        r'(?:Customer\s*Name|Account\s*Holder)\s*[:.]?\s*([A-Za-z][A-Za-z\s\.]{2,40})',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            if match.lastindex == 2:
+                name = (match.group(1) or "") + " " + match.group(2)
+            else:
+                name = match.group(1)
+            
+            name = re.sub(r'\s+', ' ', name).strip()
+            # Remove trailing non-name words and state codes
+            name = re.sub(r'\s+(Branch|IFSC|Account|Date|Period|Address|City|State|No|Number|Code|ID|Type)\s*$', '', name, flags=re.IGNORECASE)
+            name = re.sub(r'\s+[\[\(][A-Z]{2}[\]\)]\s*$', '', name)
+            name = name.strip()
+            
+            if len(name) >= 3 and not re.match(r'^\d+$', name):
+                if not any(word in name.upper() for word in ['BRANCH', 'IFSC', 'ACCOUNT', 'STATEMENT', 'BALANCE', 'BANK']):
+                    return name.title()
+    return None
+
+def _find_account_type(text_upper: str) -> Optional[str]:
+    """Extracts account type from text."""
+    type_map = {
+        'Savings': [r'\bSAVINGS\b', r'\bSAVINGS\s+ACCOUNT\b', r'\bSB\s+A\/C\b', r'\bSAV\s+A\/C\b'],
+        'Current': [r'\bCURRENT\b', r'\bCURRENT\s+ACCOUNT\b', r'\bCA\s+A\/C\b'],
+        'Salary': [r'\bSALARY\b', r'\bSALARY\s+ACCOUNT\b'],
+        'OD': [r'\bOD\b', r'\bOVERDRAFT\b', r'\bO\.D\.'],
+        'CC': [r'\bCC\b', r'\bCASH\s+CREDIT\b', r'\bC\.C\.'],
+        'NRE': [r'\bNRE\b', r'\bNRE\s+ACCOUNT\b'],
+        'NRO': [r'\bNRO\b', r'\bNRO\s+ACCOUNT\b'],
+    }
+    
+    for acc_type, patterns in type_map.items():
+        for pattern in patterns:
+            if re.search(pattern, text_upper):
+                return acc_type
+    return None
+
+def _find_customer_id(text: str) -> Optional[str]:
+    """Extracts customer ID from text."""
+    patterns = [
+        r'(?:Customer\s*ID|Cust\s*ID|CIF|CRN|Customer\s*Number)\s*[:.]?\s*(\d{6,16})',
+        r'(?:CIF\s*No|Cust\s*ID\s*No|CRN\s*No)\s*[:.]?\s*(\d{6,16})',
+        r'(?:Customer\s*ID|Cust\s*ID|CIF|CRN)\s*[:.]?\s*(\d{6,16})',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return None
+
+def _find_branch(text: str) -> Optional[str]:
+    """Extracts branch name from text. Never used as bank name."""
+    patterns = [
+        r'(?:Branch|Branch\s*Name)\s*[:.]?\s*([A-Za-z][A-Za-z0-9\s,\-\[\]\(\)]{2,50})',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            branch = match.group(1).strip()
+            branch = re.sub(r'\s*(IFSC|Account|Date|Period|Address|City|State|Code|No|Number|Pin)\s*.*$', '', branch, flags=re.IGNORECASE)
+            branch = branch.strip()
+            if len(branch) >= 3:
+                return branch
+    return None
+
+def _extract_statement_metadata(pdf_path: str) -> Dict[str, str]:
+    """
+    Extracts statement metadata from the first page of a bank statement PDF.
+    Searches both free text and table cells comprehensively.
+    Returns a dictionary keyed by canonical column names.
+    """
+    metadata: Dict[str, str] = {}
+    
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            if not pdf.pages:
+                return metadata
+                
+            page = pdf.pages[0]
+            
+            # Extract free text
+            free_text = page.extract_text() or ""
+            
+            # Extract table text
+            table_text = ""
+            tables = page.extract_tables() or []
+            for table in tables:
+                for row in table:
+                    if row:
+                        table_text += " ".join(str(cell) for cell in row if cell is not None) + " "
+            
+            # Combine both sources
+            all_text = free_text + "\n" + table_text
+            all_text_upper = all_text.upper()
+            
+            # Bank Name (highest priority — never allow branch names)
+            bank_name = _find_bank_name(all_text, all_text_upper)
+            if not bank_name:
+                bank_name = _detect_provider_from_text(all_text_upper)
+            if bank_name:
+                metadata["Sender_Bank_Name"] = bank_name
+                logger.info(f"Metadata: Bank Name = {bank_name}")
+            
+            # Account Number
+            acc_num = _find_account_number(all_text)
+            if acc_num:
+                metadata["Sender_Account_Number"] = acc_num
+                logger.info(f"Metadata: Account Number = {acc_num}")
+            
+            # IFSC
+            ifsc = _find_ifsc(all_text)
+            if ifsc:
+                metadata["Sender_IFSC"] = ifsc
+                logger.info(f"Metadata: IFSC = {ifsc}")
+            
+            # Customer Name
+            cust_name = _find_customer_name(all_text)
+            if cust_name:
+                metadata["Sender_Customer_Name"] = cust_name
+                logger.info(f"Metadata: Customer Name = {cust_name}")
+            
+            # Account Type
+            acc_type = _find_account_type(all_text_upper)
+            if acc_type:
+                metadata["Sender_Account_Type"] = acc_type
+                logger.info(f"Metadata: Account Type = {acc_type}")
+            
+            # Customer ID
+            cust_id = _find_customer_id(all_text)
+            if cust_id:
+                metadata["Sender_Customer_ID"] = cust_id
+                logger.info(f"Metadata: Customer ID = {cust_id}")
+            
+            # Currency (default INR for Indian bank statements)
+            metadata["Currency"] = "INR"
+            
+            # Branch (extracted for logging only, never injected as bank name)
+            branch = _find_branch(all_text)
+            if branch:
+                logger.info(f"Metadata: Branch = {branch}")
+                
+    except Exception as e:
+        logger.warning(f"Statement metadata extraction failed: {e}")
+        
+    return metadata
+
+def _apply_statement_metadata(df: pd.DataFrame, metadata: Dict[str, str]) -> pd.DataFrame:
+    """
+    Injects statement metadata into every transaction row.
+    Overwrites any incorrectly extracted values (e.g. branch names 
+    mapped to Sender_Bank_Name) with the correct statement-level metadata.
+    """
+    if not metadata:
+        return df
+        
+    for col, value in metadata.items():
+        if value and pd.notna(value):
+            df[col] = value
+            
+    return df
+
+def _detect_provider_metadata(df: pd.DataFrame) -> Optional[str]:
+    """
+    Detects potential data providers from the DataFrame content.
+    Returns the primary bank/provider name for metadata fallback.
+    """
+    provider_map = {
+        "SBI": "State Bank of India",
+        "HDFC": "HDFC Bank",
+        "ICICI": "ICICI Bank",
+        "AXIS": "Axis Bank",
+        "PNB": "Punjab National Bank",
+        "BOB": "Bank of Baroda",
+        "CANARA": "Canara Bank",
+        "UNION": "Union Bank of India",
+        "IDFC": "IDFC First Bank",
+        "KOTAK": "Kotak Mahindra Bank",
+        "YES BANK": "Yes Bank",
+        "INDIAN BANK": "Indian Bank",
+        "AIRTEL": "Airtel",
+        "JIO": "Jio",
+        "VI": "Vodafone Idea",
+        "BSNL": "BSNL"
+    }
+    
+>>>>>>> 05ef81144c0cd7a8d4fbb89e7eaef044c971d606
     text_dump = " ".join(df.head(20).fillna("").astype(str).values.flatten()).upper()
-    found = [p for p in providers if p.upper() in text_dump]
-    if found:
-        provider_str = ', '.join(set(found))
-        logger.info(f"Detected Provider Context: {provider_str}")
-        return provider_str
+    found_scores = {}
+    
+    for keyword, full_name in provider_map.items():
+        if keyword.upper() in text_dump:
+            found_scores[full_name] = found_scores.get(full_name, 0) + 1
+    
+    if found_scores:
+        best_provider = max(found_scores, key=found_scores.get)
+        logger.info(f"Detected Provider Context: {best_provider}")
+        return best_provider
+        
     return None
 
 
@@ -906,6 +1283,15 @@ def parse_pdf(pdf_path: str, output_dir: str = ".") -> pd.DataFrame:
     
     # 1. Block Extraction
     try:
+<<<<<<< HEAD
+=======
+        logger.info(f"Initiating parsing for: {os.path.basename(pdf_path)}")
+        
+        # 0. Statement Metadata Extraction
+        statement_metadata = _extract_statement_metadata(pdf_path)
+        
+        # 1. Block Extraction
+>>>>>>> 05ef81144c0cd7a8d4fbb89e7eaef044c971d606
         raw_df = extract_tables_from_pdf(pdf_path)
         original_rows = len(raw_df)
         logger.info(f"Stage 1 (extraction): {original_rows} raw rows extracted.")
@@ -918,6 +1304,7 @@ def parse_pdf(pdf_path: str, output_dir: str = ".") -> pd.DataFrame:
     try:
         cleaned_df, provider = _clean_raw_dataframe(raw_df)
         retained_rows = len(cleaned_df)
+<<<<<<< HEAD
         logger.info(f"Stage 2 (cleaning): {retained_rows} rows after normalization.")
     except ValueError as e:
         # Header detection failed — try to recover using row 0
@@ -933,6 +1320,38 @@ def parse_pdf(pdf_path: str, output_dir: str = ".") -> pd.DataFrame:
             retained_rows = len(cleaned_df)
         except Exception as recovery_e:
             raise ValueError(f"Header detection and recovery both failed: {e} / {recovery_e}") from e
+=======
+        
+        # 3. Intelligent Classification
+        dataset_type = detect_dataset_type(list(cleaned_df.columns))
+        
+        # 4. Canonical Projection
+        mapped_df = map_columns(cleaned_df, dataset_type)
+        
+        # 4.5 Metadata Injection for Bank Statements
+        if dataset_type == "bank":
+            # Fallback: use provider detection if explicit bank name not found
+            if provider and "Sender_Bank_Name" not in statement_metadata:
+                statement_metadata["Sender_Bank_Name"] = provider
+            if statement_metadata:
+                mapped_df = _apply_statement_metadata(mapped_df, statement_metadata)
+        
+        # 5. Semantic Value Normalization
+        clean_mapped_df = _clean_mapped_dataframe(mapped_df, dataset_type)
+        
+        # 6. Strict Schema Enforcement
+        final_df = ensure_schema(clean_mapped_df, dataset_type)
+        
+        # 7. Quality Sanity Validation
+        _validate_schema(final_df, dataset_type)
+        
+        # 8. Dispatch & Summarize
+        out_path = save_csv(final_df, dataset_type, output_dir)
+        _print_parsing_summary(original_rows, retained_rows, dataset_type, provider, mapped_df, out_path)
+        
+        return final_df
+
+>>>>>>> 05ef81144c0cd7a8d4fbb89e7eaef044c971d606
     except Exception as e:
         raise PDFExtractionError(f"Unexpected error during data cleaning: {e}") from e
     
