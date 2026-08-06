@@ -12,8 +12,14 @@ import os
 import re
 import numpy as np
 import logging
+<<<<<<< Updated upstream
 from typing import List, Optional, Tuple
 from rapidfuzz import fuzz
+=======
+from typing import List, Optional, Tuple, Dict, Any
+
+from rapidfuzz import fuzz, process
+>>>>>>> Stashed changes
 
 from schema_mapper import (
     detect_dataset_type, 
@@ -35,6 +41,40 @@ class ScannedPDFError(Exception):
 class PDFExtractionError(Exception):
     pass
 
+<<<<<<< Updated upstream
+=======
+
+# ==========================================
+# MINIMUM REQUIRED FIELDS (relaxed validation)
+# ==========================================
+
+MINIMUM_REQUIRED_FIELDS = {
+    "bank": {
+        "required": ["Date"],
+        "any_of": [
+            ["Transaction_Amount", "Transaction_Amount_Merged"],
+        ],
+    },
+    "cdr": {
+        "required": ["Call_Date"],
+        "any_of": [
+            ["A_Party_Number", "B_Party_Number"],
+        ],
+    },
+    "ipdr": {
+        "required": ["Session_Date"],
+        "any_of": [
+            ["Source_IP_Address", "Subscriber_IMSI", "Subscriber_MSISDN", "Device_IMEI"],
+        ],
+    },
+}
+
+
+# ==========================================
+# TEXT NORMALIZATION
+# ==========================================
+
+>>>>>>> Stashed changes
 def _normalize_text(text: str) -> str:
     """Removes strange unicode characters, newlines, tabs, and trims whitespace."""
     if pd.isna(text):
@@ -44,9 +84,108 @@ def _normalize_text(text: str) -> str:
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
+<<<<<<< Updated upstream
 def _detect_provider_metadata(df: pd.DataFrame) -> Optional[str]:
     """Internal mechanism to log potential data providers, zero impact on schema."""
     providers = ["SBI", "HDFC", "ICICI", "Axis", "PNB", "BOB", "Airtel", "Jio", "Vi", "BSNL"]
+=======
+
+# ==========================================
+# AMOUNT PARSING
+# ==========================================
+
+def _parse_amount(val) -> Optional[float]:
+    """
+    Production-grade amount parser. Handles:
+    - Currency symbols: ₹, $, Rs., Rs, INR
+    - Thousands separators: 1,234.56 and Indian 1,23,456.78
+    - Parenthesized negatives: (1,234.56) → -1234.56
+    - Trailing minus: 1,234.56- → -1234.56
+    - Leading minus with commas: -1,234.56 → -1234.56
+    - DR/CR suffixes: 1234.56 DR → -1234.56, 1234.56 CR → 1234.56
+    - Plain numbers
+    """
+    if pd.isna(val):
+        return None
+    
+    s = str(val).strip()
+    if not s:
+        return None
+    
+    # Remove currency symbols
+    s = re.sub(r'[₹$]', '', s)
+    s = re.sub(r'\bRs\.?\s*', '', s, flags=re.IGNORECASE)
+    s = re.sub(r'\bINR\s*', '', s, flags=re.IGNORECASE)
+    s = s.strip()
+    
+    if not s:
+        return None
+    
+    is_negative = False
+    
+    # Check for parenthesized negatives: (1,234.56)
+    paren_match = re.match(r'^\(([\d,. ]+)\)$', s)
+    if paren_match:
+        s = paren_match.group(1)
+        is_negative = True
+    
+    # Check for DR/CR suffix
+    dr_match = re.match(r'^([\d,.\- ]+)\s*(DR|DEBIT|D)\s*$', s, re.IGNORECASE)
+    cr_match = re.match(r'^([\d,.\- ]+)\s*(CR|CREDIT|C)\s*$', s, re.IGNORECASE)
+    
+    if dr_match:
+        s = dr_match.group(1)
+        is_negative = True
+    elif cr_match:
+        s = cr_match.group(1)
+        is_negative = False
+    
+    # Check for DR/CR prefix
+    dr_prefix = re.match(r'^(DR|DEBIT|D)\s+([\d,.\- ]+)$', s, re.IGNORECASE)
+    cr_prefix = re.match(r'^(CR|CREDIT|C)\s+([\d,.\- ]+)$', s, re.IGNORECASE)
+    
+    if dr_prefix:
+        s = dr_prefix.group(2)
+        is_negative = True
+    elif cr_prefix:
+        s = cr_prefix.group(2)
+        is_negative = False
+    
+    # Check for trailing minus: 1234.56-
+    if s.endswith('-'):
+        s = s[:-1]
+        is_negative = True
+    
+    # Check for leading minus
+    if s.startswith('-'):
+        s = s[1:]
+        is_negative = not is_negative  # Double negative = positive
+    
+    # Remove remaining non-numeric characters except dots
+    s = s.replace(',', '').replace(' ', '')
+    
+    # Handle multiple dots (Indian format edge case): keep only the last dot
+    dot_count = s.count('.')
+    if dot_count > 1:
+        parts = s.split('.')
+        s = ''.join(parts[:-1]) + '.' + parts[-1]
+    
+    try:
+        result = float(s)
+        return -abs(result) if is_negative else result
+    except (ValueError, TypeError):
+        return None
+
+
+# ==========================================
+# PROVIDER DETECTION
+# ==========================================
+
+def _detect_provider_metadata(df: pd.DataFrame) -> Optional[str]:
+    """Internal mechanism to log potential data providers, zero impact on schema."""
+    providers = ["SBI", "HDFC", "ICICI", "Axis", "PNB", "BOB", "Airtel", "Jio", "Vi", "BSNL",
+                 "Kotak", "IndusInd", "Yes Bank", "Federal", "Canara", "Union", "IOB", "RBL"]
+>>>>>>> Stashed changes
     text_dump = " ".join(df.head(20).fillna("").astype(str).values.flatten()).upper()
     found = [p for p in providers if p.upper() in text_dump]
     if found:
@@ -316,15 +455,19 @@ def parse_pdf(pdf_path: str, output_dir: str = ".") -> pd.DataFrame:
         raise FileNotFoundError(f"The PDF file at '{pdf_path}' was not found.")
         
     try:
+<<<<<<< Updated upstream
         logger.info(f"Initiating parsing for: {os.path.basename(pdf_path)}")
         
         # 1. Block Extraction
+=======
+>>>>>>> Stashed changes
         raw_df = extract_tables_from_pdf(pdf_path)
         original_rows = len(raw_df)
         
         # 2. Structural & Header Normalization
         cleaned_df, provider = _clean_raw_dataframe(raw_df)
         retained_rows = len(cleaned_df)
+<<<<<<< Updated upstream
         
         # 3. Intelligent Classification
         dataset_type = detect_dataset_type(list(cleaned_df.columns))
@@ -347,6 +490,23 @@ def parse_pdf(pdf_path: str, output_dir: str = ".") -> pd.DataFrame:
         
         return final_df
 
+=======
+        logger.info(f"Stage 2 (cleaning): {retained_rows} rows after normalization.")
+    except ValueError as e:
+        # Header detection failed — try to recover using row 0
+        logger.warning(f"Stage 2 header detection error: {e}. Attempting recovery with row 0 as header.")
+        all_warnings.append(f"Header detection failed: {e}")
+        try:
+            raw_df.columns = raw_df.iloc[0].astype(str).apply(_normalize_text)
+            cleaned_df = raw_df.iloc[1:].reset_index(drop=True)
+            cleaned_df = cleaned_df.replace(r'^\s*$', pd.NA, regex=True)
+            cleaned_df = cleaned_df.dropna(how='all')
+            cleaned_df = _merge_debit_credit(cleaned_df)
+            provider = None
+            retained_rows = len(cleaned_df)
+        except Exception as recovery_e:
+            raise ValueError(f"Header detection and recovery both failed: {e} / {recovery_e}") from e
+>>>>>>> Stashed changes
     except Exception as e:
         logger.error(f"Failed to parse PDF '{pdf_path}': {str(e)}")
         raise
